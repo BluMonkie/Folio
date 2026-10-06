@@ -1,11 +1,15 @@
 from fastapi import FastAPI
 from backend.config import settings
 
+from backend.routers import books
+
 app = FastAPI(
     title="Folio API",
     description="Backend API for Folio — a hybrid knowledge base with SQL capabilities.",
     version="0.1.0"
 )
+
+app.include_router(books.router)
 
 @app.get("/")
 def read_root():
