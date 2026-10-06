@@ -10,3 +10,24 @@ app = FastAPI(
 @app.get("/")
 def read_root():
     return {"message": "Hello World"}
+
+@app.get("/health")
+def health_check():
+    """Checks application and database health."""
+    try:
+        from backend.database import get_db
+        with get_db() as cursor:
+            cursor.execute("SELECT COUNT(*) AS book_count FROM Book;")
+            result = cursor.fetchone()
+            book_count = result["book_count"] if result else 0
+
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "book_count": book_count
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "database": f"error: {str(e)}"
+        }
