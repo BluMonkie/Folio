@@ -1,9 +1,8 @@
 import re
 from typing import List, Set
 
-# Regex matches unescaped [[target]] or [[target|display]]
-# Negative lookbehind (?<!\\) ensures escaped \[[...]] is ignored
-WIKILINK_REGEX = re.compile(r"(?<!\\)\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+# Regex matches [[target]] or [[target|display]], also tolerant to escaped \[\[target\]\]
+WIKILINK_REGEX = re.compile(r"(?<!\\\\)(?:\\)?\[(?:\\)?\[([^\]|\\]+)(?:\|[^\]\\]+)?(?:\\)?\](?:\\)?\]")
 
 def extract_wikilink_targets(markdown_text: str) -> Set[str]:
     """

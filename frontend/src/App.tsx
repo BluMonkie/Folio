@@ -359,6 +359,26 @@ export function App() {
     }
   };
 
+  // Handler: Save Page Markdown Content
+  const handleSavePageContent = async (pageId: number, content: string) => {
+    try {
+      await api.updatePage(pageId, { content });
+      const updatedRender = await api.getPageRender(pageId);
+      setPageData(updatedRender);
+
+      // Refresh inspector metadata (backlinks, history)
+      const [bList, hList] = await Promise.all([
+        api.getPageBacklinks(pageId).catch(() => []),
+        api.getPageHistory(pageId).catch(() => []),
+      ]);
+      setBacklinks(bList);
+      setHistory(hList);
+    } catch (err: any) {
+      console.error("Failed to save note content:", err);
+      throw err;
+    }
+  };
+
   // Handler: Create Book
   const handleCreateBookSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -515,6 +535,7 @@ export function App() {
                 onBackToBookshelf={() => setActiveView("bookshelf")}
                 isPinned={Boolean(activePageId && pinnedPages.some((p) => p.page_id === activePageId))}
                 onTogglePin={handleTogglePin}
+                onSaveContent={handleSavePageContent}
               />
             )}
           </div>

@@ -7,7 +7,7 @@ from backend.database import get_db, get_runner_db
 from backend.services.query_validator import validate_select_query
 
 QUERY_BLOCK_REGEX = re.compile(r":::\s*query\s*([\s\S]*?):::", re.IGNORECASE)
-WIKILINK_REGEX = re.compile(r"(?<!\\)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
+WIKILINK_REGEX = re.compile(r"(?<!\\\\)(?:\\)?\[(?:\\)?\[([^\]|\\]+)(?:\|([^\]\\]+))?(?:\\)?\](?:\\)?\]")
 
 def render_error_block(title: str, message: str) -> str:
     """Renders a styled error container for SQL validation or execution failures."""
