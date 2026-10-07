@@ -22,4 +22,8 @@ class Settings:
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
+    # Sandboxed Query Runner DB Settings (MySQL 8.0 Role Executor)
+    RUNNER_DB_USER: str = os.getenv("RUNNER_DB_USER", "folio_runner")
+    RUNNER_DB_PASSWORD: str = os.getenv("RUNNER_DB_PASSWORD", "folio_runner_pass")
+
 settings = Settings()

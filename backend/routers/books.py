@@ -156,6 +156,10 @@ def create_book(payload: BookCreate, current_user: CurrentUser = Depends(get_cur
         cursor.execute(insert_query, (current_user.user_id, payload.title, slug))
         book_id = cursor.lastrowid
 
+        # Provision sandboxed MySQL role for this book
+        cursor.execute(f"CREATE ROLE IF NOT EXISTS 'role_book_{book_id}';")
+        cursor.execute(f"GRANT 'role_book_{book_id}' TO '{settings.RUNNER_DB_USER}'@'localhost';")
+
         cursor.execute("""
             SELECT 
                 b.book_id, b.owner_id, u.name AS owner_name, b.title, b.slug, b.created_at 
@@ -262,6 +266,7 @@ def delete_book(book_id: int, current_user: CurrentUser = Depends(get_current_us
         slug = cursor.fetchone()["slug"]
 
         cursor.execute("DELETE FROM Book WHERE book_id = %s;", (book_id,))
+        cursor.execute(f"DROP ROLE IF EXISTS 'role_book_{book_id}';")
 
     book_dir = settings.FOLIO_STORAGE_ROOT / slug
     if book_dir.exists() and book_dir.is_dir():

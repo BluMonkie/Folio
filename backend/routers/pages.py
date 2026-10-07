@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from backend.database import get_db
 from backend.routers.books import require_book_role
 from backend.services import storage, markdown
+from backend.services.renderer import render_page_content
 from backend.services.auth import get_current_user, CurrentUser
 from backend.utils import slugify
 
@@ -14,6 +15,13 @@ router = APIRouter(tags=["Pages"])
 # -----------------------------------------------------------------------------
 # Pydantic Schemas
 # -----------------------------------------------------------------------------
+class PageRenderResponse(BaseModel):
+    page_id: int
+    book_id: int
+    title: str
+    slug: str
+    raw_content: str
+    html_content: str
 class PageCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     slug: Optional[str] = Field(None, max_length=255)
@@ -181,6 +189,52 @@ def get_page(page_id: int, current_user: CurrentUser = Depends(get_current_user)
         "slug": page["slug"],
         "position": page["position"],
         "content": content
+    }
+
+@router.get("/pages/{page_id}/render", response_model=PageRenderResponse)
+def render_page(page_id: int, current_user: CurrentUser = Depends(get_current_user)):
+    """
+    Renders page markdown into HTML:
+    - Parses and dynamically executes :::query ... ::: SQL blocks with role isolation and grant enforcement.
+    - Resolves [[wikilinks]] into navigational links or broken-link indicators.
+    - Converts markdown formatting to HTML.
+    - Requires at least VIEWER access to the containing book.
+    """
+    with get_db() as cursor:
+        query = """
+            SELECT 
+                p.page_id, 
+                p.book_id, 
+                p.title, 
+                p.slug, 
+                b.slug AS book_slug
+            FROM Page p
+            JOIN Book b ON p.book_id = b.book_id
+            WHERE p.page_id = %s;
+        """
+        cursor.execute(query, (page_id,))
+        page = cursor.fetchone()
+
+        if not page:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Page with ID {page_id} not found.")
+
+        require_book_role(cursor, page["book_id"], current_user.user_id)
+
+    raw_content = storage.read_page_content(page["book_slug"], page["slug"])
+    html_content = render_page_content(
+        page_id=page["page_id"],
+        book_id=page["book_id"],
+        book_slug=page["book_slug"],
+        raw_markdown=raw_content
+    )
+
+    return {
+        "page_id": page["page_id"],
+        "book_id": page["book_id"],
+        "title": page["title"],
+        "slug": page["slug"],
+        "raw_content": raw_content,
+        "html_content": html_content
     }
 
 @router.put("/pages/{page_id}", response_model=PageResponse)

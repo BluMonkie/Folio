@@ -56,7 +56,19 @@ def init_db(with_seed: bool = False):
                 else:
                     print(f"Warning: Seed file not found at {seed_path}")
 
-        print(f"\nDatabase '{settings.DB_NAME}' initialized successfully!")
+            # 4. Provision sandboxed runner user and book roles
+            print(f"Provisioning sandboxed query runner '{settings.RUNNER_DB_USER}'...")
+            cursor.execute(f"CREATE USER IF NOT EXISTS '{settings.RUNNER_DB_USER}'@'localhost' IDENTIFIED BY '{settings.RUNNER_DB_PASSWORD}';")
+            cursor.execute(f"ALTER USER '{settings.RUNNER_DB_USER}'@'localhost' IDENTIFIED BY '{settings.RUNNER_DB_PASSWORD}';")
+            cursor.execute(f"REVOKE ALL PRIVILEGES, GRANT OPTION FROM '{settings.RUNNER_DB_USER}'@'localhost';")
+
+            if with_seed:
+                print("Configuring MySQL 8.0 Roles for seeded books...")
+                cursor.execute("CREATE ROLE IF NOT EXISTS 'role_book_1', 'role_book_2';")
+                cursor.execute(f"GRANT 'role_book_1', 'role_book_2' TO '{settings.RUNNER_DB_USER}'@'localhost';")
+                cursor.execute(f"GRANT SELECT ON `{settings.DB_NAME}`.StudentGrades TO 'role_book_1';")
+
+        print(f"\nDatabase '{settings.DB_NAME}' initialized successfully with sandboxed runner!")
 
     finally:
         connection.close()

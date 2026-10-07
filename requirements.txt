@@ -9,3 +9,4 @@ bcrypt>=4.1.0
 pyjwt>=2.8.0
 email-validator>=2.0.0
 python-multipart>=0.0.9
+sqlglot>=23.0.0
