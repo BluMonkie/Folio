@@ -21,12 +21,11 @@ def render_error_block(title: str, message: str) -> str:
     )
 
 def render_table_html(columns: List[str], rows: List[dict], total_count: int, truncated: bool) -> str:
-    """Renders an HTML data table from SQL query results."""
+    """Renders an HTML data table from query results."""
     if not rows:
         return (
             f'<div class="folio-query-box">'
             f'  <div class="folio-query-header">'
-            f'    <span class="folio-badge folio-badge-info">SQL Query Result</span>'
             f'    <span class="folio-count">0 rows</span>'
             f'  </div>'
             f'  <div class="folio-query-empty">No records found.</div>'
@@ -52,7 +51,6 @@ def render_table_html(columns: List[str], rows: List[dict], total_count: int, tr
     return (
         f'<div class="folio-query-box">'
         f'  <div class="folio-query-header">'
-        f'    <span class="folio-badge folio-badge-success">SQL Query Result</span>'
         f'    <span class="folio-count">{count_label}</span>'
         f'  </div>'
         f'  <div class="folio-table-wrapper">'
@@ -72,7 +70,7 @@ def execute_and_render_query(page_id: int, book_id: int, sql_text: str) -> str:
     # 1. AST Validation
     is_valid, error_msg, physical_tables = validate_select_query(sql_text)
     if not is_valid:
-        return render_error_block("Query Validation Failed", error_msg or "Invalid SQL query.")
+        return render_error_block("Query Notice", error_msg or "Invalid query syntax.")
 
     # 2. Check Table Grants via Database View (v_EffectivePageGrants)
     with get_db() as cursor:
@@ -88,8 +86,8 @@ def execute_and_render_query(page_id: int, book_id: int, sql_text: str) -> str:
     for table in physical_tables:
         if table.lower() not in allowed_tables:
             return render_error_block(
-                "Table Access Denied",
-                f"Page does not have read permission for table '{table}'. Contact a book owner or administrator to grant table access."
+                "Access Restricted",
+                f"You do not have permission to view '{table}'. Contact a book owner or administrator for access."
             )
 
     # 3. Sandboxed Execution via MySQL Runner & Book Role
@@ -111,7 +109,7 @@ def execute_and_render_query(page_id: int, book_id: int, sql_text: str) -> str:
             return render_table_html(columns, displayed_rows, len(rows), truncated)
 
     except Exception as e:
-        return render_error_block("Database Execution Error", str(e))
+        return render_error_block("Query Error", str(e))
 
 def render_wikilinks(book_id: int, book_slug: str, text: str) -> str:
     """

@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from backend.config import settings
 
 from backend.routers import books, pages, auth, tags, grants, search
@@ -7,6 +8,14 @@ app = FastAPI(
     title="Folio API",
     description="Backend API for Folio — a hybrid knowledge base with SQL capabilities.",
     version="0.1.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(auth.router)

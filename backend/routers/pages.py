@@ -36,6 +36,10 @@ class PageUpdate(BaseModel):
     position: Optional[int] = None
     content: Optional[str] = None
 
+class PageMove(BaseModel):
+    target_page_id: Optional[int] = None
+    drop_position: str = "inside"  # "before", "after", "inside"
+
 class PageResponse(BaseModel):
     page_id: int
     book_id: int
@@ -270,11 +274,19 @@ def update_page(page_id: int, payload: PageUpdate, current_user: CurrentUser = D
         require_book_role(cursor, book_id, current_user.user_id, allowed_roles=("OWNER", "ADMIN", "EDITOR"))
 
         old_slug = page["slug"]
-        new_title = payload.title if payload.title is not None else page["title"]
-        new_parent_id = payload.parent_page_id if payload.parent_page_id is not None else page["parent_page_id"]
+        if "parent_page_id" in payload.model_fields_set:
+            new_parent_id = payload.parent_page_id
+            if new_parent_id is not None and new_parent_id == page_id:
+                raise HTTPException(status_code=400, detail="A page cannot be its own parent.")
+        else:
+            new_parent_id = page["parent_page_id"]
         new_position = payload.position if payload.position is not None else page["position"]
 
-        # Compute new slug if title or slug provided
+        # Compute new title and slug
+        new_title = payload.title.strip() if payload.title is not None else page["title"]
+        if not new_title:
+            raise HTTPException(status_code=400, detail="Page title cannot be empty.")
+
         new_slug = old_slug
         if payload.slug is not None:
             new_slug = slugify(payload.slug)
@@ -282,15 +294,18 @@ def update_page(page_id: int, payload: PageUpdate, current_user: CurrentUser = D
             new_slug = slugify(payload.title)
 
         if new_slug != old_slug:
-            cursor.execute(
-                "SELECT page_id FROM Page WHERE book_id = %s AND slug = %s AND page_id != %s;",
-                (book_id, new_slug, page_id)
-            )
-            if cursor.fetchone():
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Page with slug '{new_slug}' already exists in this book."
+            base_slug = new_slug
+            counter = 1
+            while True:
+                cursor.execute(
+                    "SELECT page_id FROM Page WHERE book_id = %s AND slug = %s AND page_id != %s;",
+                    (book_id, new_slug, page_id)
                 )
+                if not cursor.fetchone():
+                    break
+                counter += 1
+                new_slug = f"{base_slug}-{counter}"
+
             storage.rename_page_file(book_slug, old_slug, new_slug)
 
         # Update content if provided
@@ -407,3 +422,87 @@ def get_page_history(page_id: int, current_user: CurrentUser = Depends(get_curre
         history = cursor.fetchall()
 
     return history
+
+@router.post("/pages/{page_id}/move", response_model=PageResponse)
+def move_page(page_id: int, payload: PageMove, current_user: CurrentUser = Depends(get_current_user)):
+    """
+    Moves/reorders a page within a book's hierarchy:
+    - drop_position == 'inside': page becomes a child of target_page_id (or root if None).
+    - drop_position == 'before': page becomes sibling of target_page_id, placed immediately before it.
+    - drop_position == 'after': page becomes sibling of target_page_id, placed immediately after it.
+    Prevents cycles and maintains sequential positions.
+    """
+    with get_db() as cursor:
+        cursor.execute("SELECT book_id, parent_page_id, position, title, slug FROM Page WHERE page_id = %s;", (page_id,))
+        page = cursor.fetchone()
+        if not page:
+            raise HTTPException(status_code=404, detail="Page not found.")
+        
+        book_id = page["book_id"]
+        require_book_role(cursor, book_id, current_user.user_id, allowed_roles=("OWNER", "ADMIN", "EDITOR"))
+
+        # Cycle prevention: target parent cannot be page_id itself or any of its descendants
+        cursor.execute("""
+            WITH RECURSIVE subpages AS (
+                SELECT page_id FROM Page WHERE page_id = %s
+                UNION ALL
+                SELECT p.page_id FROM Page p JOIN subpages s ON p.parent_page_id = s.page_id
+            )
+            SELECT page_id FROM subpages;
+        """, (page_id,))
+        descendants = {r["page_id"] for r in cursor.fetchall()}
+
+        target_page = None
+        if payload.target_page_id is not None:
+            cursor.execute("SELECT page_id, parent_page_id, position, book_id FROM Page WHERE page_id = %s;", (payload.target_page_id,))
+            target_page = cursor.fetchone()
+            if not target_page or target_page["book_id"] != book_id:
+                raise HTTPException(status_code=400, detail="Target page does not exist in this book.")
+
+        new_parent_id = None
+        if payload.drop_position == "inside":
+            if payload.target_page_id is not None and payload.target_page_id in descendants:
+                raise HTTPException(status_code=400, detail="Cannot move a page inside itself or its own descendants.")
+            new_parent_id = payload.target_page_id
+            if new_parent_id is None:
+                cursor.execute("SELECT COALESCE(MAX(position), 0) + 1 AS next_pos FROM Page WHERE book_id = %s AND parent_page_id IS NULL AND page_id != %s;", (book_id, page_id))
+            else:
+                cursor.execute("SELECT COALESCE(MAX(position), 0) + 1 AS next_pos FROM Page WHERE book_id = %s AND parent_page_id = %s AND page_id != %s;", (book_id, new_parent_id, page_id))
+            new_pos = cursor.fetchone()["next_pos"]
+            cursor.execute("UPDATE Page SET parent_page_id = %s, position = %s WHERE page_id = %s;", (new_parent_id, new_pos, page_id))
+        elif payload.drop_position in ("before", "after") and target_page:
+            new_parent_id = target_page["parent_page_id"]
+            if new_parent_id is not None and new_parent_id in descendants:
+                raise HTTPException(status_code=400, detail="Cannot move page into descendant branch.")
+            
+            # Fetch existing siblings excluding page_id
+            if new_parent_id is None:
+                cursor.execute("SELECT page_id FROM Page WHERE book_id = %s AND parent_page_id IS NULL AND page_id != %s ORDER BY position, page_id;", (book_id, page_id))
+            else:
+                cursor.execute("SELECT page_id FROM Page WHERE book_id = %s AND parent_page_id = %s AND page_id != %s ORDER BY position, page_id;", (book_id, new_parent_id, page_id))
+            siblings = [r["page_id"] for r in cursor.fetchall()]
+
+            try:
+                target_idx = siblings.index(payload.target_page_id)
+            except ValueError:
+                target_idx = len(siblings)
+            
+            insert_idx = target_idx if payload.drop_position == "before" else target_idx + 1
+            siblings.insert(insert_idx, page_id)
+
+            for idx, pid in enumerate(siblings, start=1):
+                if pid == page_id:
+                    cursor.execute("UPDATE Page SET parent_page_id = %s, position = %s WHERE page_id = %s;", (new_parent_id, idx, pid))
+                else:
+                    cursor.execute("UPDATE Page SET position = %s WHERE page_id = %s;", (idx, pid))
+        else:
+            # Fallback to root end
+            cursor.execute("SELECT COALESCE(MAX(position), 0) + 1 AS next_pos FROM Page WHERE book_id = %s AND parent_page_id IS NULL AND page_id != %s;", (book_id, page_id))
+            new_pos = cursor.fetchone()["next_pos"]
+            cursor.execute("UPDATE Page SET parent_page_id = NULL, position = %s WHERE page_id = %s;", (new_pos, page_id))
+            new_parent_id = None
+
+        cursor.execute("SELECT page_id, book_id, parent_page_id, title, slug, position FROM Page WHERE page_id = %s;", (page_id,))
+        updated = cursor.fetchone()
+        updated["content"] = ""
+        return updated

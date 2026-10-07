@@ -19,6 +19,10 @@ class BookCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255, description="Title of the book")
     slug: Optional[str] = Field(None, max_length=255, description="Custom slug (optional)")
 
+class BookUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255, description="Updated title of the book")
+    slug: Optional[str] = Field(None, max_length=255, description="Custom slug (optional)")
+
 class BookResponse(BaseModel):
     book_id: int
     owner_id: int
@@ -219,7 +223,8 @@ def get_book_tree(book_id: int, current_user: CurrentUser = Depends(get_current_
                     slug, 
                     position,
                     0 AS depth,
-                    CAST(title AS CHAR(1000)) AS breadcrumb
+                    CAST(title AS CHAR(1000)) AS breadcrumb,
+                    CAST(LPAD(position, 5, '0') AS CHAR(1000)) AS sort_path
                 FROM Page
                 WHERE book_id = %s AND parent_page_id IS NULL
 
@@ -233,7 +238,8 @@ def get_book_tree(book_id: int, current_user: CurrentUser = Depends(get_current_
                     child.slug, 
                     child.position,
                     parent.depth + 1,
-                    CONCAT(parent.breadcrumb, ' > ', child.title)
+                    CONCAT(parent.breadcrumb, ' / ', child.title),
+                    CONCAT(parent.sort_path, '.', LPAD(child.position, 5, '0'))
                 FROM Page child
                 JOIN page_tree parent ON child.parent_page_id = parent.page_id
             )
@@ -246,12 +252,68 @@ def get_book_tree(book_id: int, current_user: CurrentUser = Depends(get_current_
                 depth, 
                 breadcrumb 
             FROM page_tree 
-            ORDER BY depth, position;
+            ORDER BY sort_path;
         """
         cursor.execute(query, (book_id,))
         tree_nodes = cursor.fetchall()
 
     return tree_nodes
+
+@router.put("/{book_id}", response_model=BookResponse)
+def update_book(book_id: int, payload: BookUpdate, current_user: CurrentUser = Depends(get_current_user)):
+    """
+    Updates book title/slug. Requires OWNER or ADMIN role.
+    """
+    with get_db() as cursor:
+        user_role = require_book_role(cursor, book_id, current_user.user_id, allowed_roles=("OWNER", "ADMIN"))
+        cursor.execute("SELECT title, slug FROM Book WHERE book_id = %s;", (book_id,))
+        book = cursor.fetchone()
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found.")
+        
+        new_title = payload.title.strip() if payload.title is not None else book["title"]
+        if not new_title:
+            raise HTTPException(status_code=400, detail="Book title cannot be empty.")
+            
+        old_slug = book["slug"]
+        new_slug = old_slug
+        if payload.slug is not None:
+            new_slug = slugify(payload.slug)
+        elif payload.title is not None and payload.title != book["title"]:
+            new_slug = slugify(payload.title)
+            
+        if new_slug != old_slug:
+            base_slug = new_slug
+            counter = 1
+            while True:
+                cursor.execute("SELECT book_id FROM Book WHERE slug = %s AND book_id != %s;", (new_slug, book_id))
+                if not cursor.fetchone():
+                    break
+                counter += 1
+                new_slug = f"{base_slug}-{counter}"
+                
+            old_dir = settings.FOLIO_STORAGE_ROOT / old_slug
+            new_dir = settings.FOLIO_STORAGE_ROOT / new_slug
+            if old_dir.exists():
+                old_dir.rename(new_dir)
+            else:
+                new_dir.mkdir(parents=True, exist_ok=True)
+                
+        cursor.execute("UPDATE Book SET title = %s, slug = %s WHERE book_id = %s;", (new_title, new_slug, book_id))
+        
+        cursor.execute("""
+            SELECT 
+                b.book_id, b.owner_id, u.name AS owner_name, b.title, b.slug, b.created_at,
+                COUNT(p.page_id) AS total_pages
+            FROM Book b
+            JOIN User u ON b.owner_id = u.user_id
+            LEFT JOIN Page p ON b.book_id = p.book_id
+            WHERE b.book_id = %s
+            GROUP BY b.book_id, b.owner_id, u.name, b.title, b.slug, b.created_at;
+        """, (book_id,))
+        updated = cursor.fetchone()
+        updated["user_role"] = user_role
+        return updated
 
 @router.delete("/{book_id}", status_code=status.HTTP_200_OK)
 def delete_book(book_id: int, current_user: CurrentUser = Depends(get_current_user)):
