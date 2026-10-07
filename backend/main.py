@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from backend.config import settings
 
-from backend.routers import books, pages, auth
+from backend.routers import books, pages, auth, tags
 
 app = FastAPI(
     title="Folio API",
@@ -12,6 +12,7 @@ app = FastAPI(
 app.include_router(auth.router)
 app.include_router(books.router)
 app.include_router(pages.router)
+app.include_router(tags.router)
 
 @app.get("/")
 def read_root():
