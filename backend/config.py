@@ -17,4 +17,9 @@ class Settings:
     # Storage settings
     FOLIO_STORAGE_ROOT: Path = BASE_DIR / os.getenv("FOLIO_STORAGE_ROOT", "storage")
 
+    # Authentication / Security settings
+    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "folio-insecure-secret-key-change-in-production-123456")
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
+
 settings = Settings()

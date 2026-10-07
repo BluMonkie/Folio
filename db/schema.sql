@@ -1,9 +1,30 @@
+-- Users
+CREATE TABLE User (
+    user_id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Book db
 CREATE TABLE Book (
     book_id INT AUTO_INCREMENT PRIMARY KEY,
+    owner_id INT NOT NULL,
     title VARCHAR(255) NOT NULL,
     slug VARCHAR(255) UNIQUE NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (owner_id) REFERENCES User(user_id) ON DELETE CASCADE
+);
+
+-- Book Collaboration / Sharing (Role-Based Access Control)
+CREATE TABLE BookCollaborators (
+    book_id INT NOT NULL,
+    user_id INT NOT NULL,
+    role VARCHAR(50) NOT NULL DEFAULT 'EDITOR' CHECK (role IN ('VIEWER', 'EDITOR', 'ADMIN')),
+    PRIMARY KEY (book_id, user_id),
+    FOREIGN KEY (book_id) REFERENCES Book(book_id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES User(user_id) ON DELETE CASCADE
 );
 
 -- Page db
@@ -18,12 +39,6 @@ CREATE TABLE Page (
     FOREIGN KEY (parent_page_id) REFERENCES Page(page_id) ON DELETE SET NULL,
     UNIQUE KEY (parent_page_id, position),
     UNIQUE KEY (book_id, slug)
-);
-
--- Users
-CREATE Table User (
-    user_id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(255) NOT NULL    
 );
 
 -- Edit history

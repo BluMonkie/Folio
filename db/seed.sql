@@ -14,6 +14,7 @@ TRUNCATE TABLE Backlinks;
 TRUNCATE TABLE Edits;
 TRUNCATE TABLE EditHistory;
 TRUNCATE TABLE Page;
+TRUNCATE TABLE BookCollaborators;
 TRUNCATE TABLE Book;
 TRUNCATE TABLE User;
 SET FOREIGN_KEY_CHECKS = 1;
@@ -21,16 +22,20 @@ SET FOREIGN_KEY_CHECKS = 1;
 -- -----------------------------------------------------------------------------
 -- 1. Users
 -- -----------------------------------------------------------------------------
-INSERT INTO User (user_id, name) VALUES
-(1, 'Alice Chen'),
-(2, 'Bob Smith');
+INSERT INTO User (user_id, name, email, password_hash) VALUES
+(1, 'Alice Chen', 'alice@example.com', '$2b$12$mJ.M8V.UTljrMq5SUKliOemosi72zuWb80d.4YJvHCqen77Z/g/wO'),
+(2, 'Bob Smith', 'bob@example.com', '$2b$12$mJ.M8V.UTljrMq5SUKliOemosi72zuWb80d.4YJvHCqen77Z/g/wO');
 
 -- -----------------------------------------------------------------------------
--- 2. Books
+-- 2. Books & Collaborators
 -- -----------------------------------------------------------------------------
-INSERT INTO Book (book_id, title, slug) VALUES
-(1, 'DBMS 101 Notes', 'dbms-101-notes'),
-(2, 'Personal Journal', 'personal-journal');
+INSERT INTO Book (book_id, owner_id, title, slug) VALUES
+(1, 1, 'DBMS 101 Notes', 'dbms-101-notes'),
+(2, 1, 'Personal Journal', 'personal-journal');
+
+-- Alice (user 1) shares 'DBMS 101 Notes' (book 1) with Bob (user 2) as an EDITOR
+INSERT INTO BookCollaborators (book_id, user_id, role) VALUES
+(1, 2, 'EDITOR');
 
 -- -----------------------------------------------------------------------------
 -- 3. Pages (Demonstrates 3-level hierarchy in Book 1)

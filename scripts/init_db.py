@@ -35,9 +35,10 @@ def init_db(with_seed: bool = False):
 
     try:
         with connection.cursor() as cursor:
-            # 1. Ensure database exists
-            print(f"Ensuring database '{settings.DB_NAME}' exists...")
-            cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{settings.DB_NAME}`;")
+            # 1. Reset database
+            print(f"Recreating database '{settings.DB_NAME}'...")
+            cursor.execute(f"DROP DATABASE IF EXISTS `{settings.DB_NAME}`;")
+            cursor.execute(f"CREATE DATABASE `{settings.DB_NAME}`;")
             cursor.execute(f"USE `{settings.DB_NAME}`;")
 
             # 2. Execute schema.sql
