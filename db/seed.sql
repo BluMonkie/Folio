@@ -133,7 +133,11 @@ INSERT INTO QueryableDatabases (db_name) VALUES
 INSERT INTO QueryableTables (table_id, table_name, db) VALUES
 (1, 'StudentGrades', 'folio_db');
 
--- Grant access to Page 3 (SQL Basics) and Page 5 (Recursive Queries)
+-- Book-level grant for Book 1 (DBMS Course Notes)
+INSERT INTO BookTableGrants (grant_id, book_id, table_id, can_read, can_write) VALUES
+(1, 1, 1, TRUE, FALSE);
+
+-- Page-level grants (Page 3 has an explicit page-level override)
 INSERT INTO PageTableGrants (grant_id, page_id, table_id) VALUES
 (1, 3, 1),
 (2, 5, 1);

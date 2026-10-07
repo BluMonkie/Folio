@@ -95,6 +95,17 @@ CREATE TABLE QueryableTables(
     UNIQUE KEY (table_name, db)
 );
 
+CREATE TABLE BookTableGrants(
+    grant_id INT AUTO_INCREMENT PRIMARY KEY,
+    book_id INT NOT NULL,
+    table_id INT NOT NULL,
+    can_read BOOLEAN DEFAULT TRUE,
+    can_write BOOLEAN DEFAULT FALSE,
+    FOREIGN KEY (book_id) REFERENCES Book(book_id) ON DELETE CASCADE,
+    FOREIGN KEY (table_id) REFERENCES QueryableTables(table_id) ON DELETE CASCADE,
+    UNIQUE KEY uq_book_table (book_id, table_id)
+);
+
 CREATE TABLE PageTableGrants(
     grant_id INT AUTO_INCREMENT PRIMARY KEY,
     page_id INT NOT NULL,
@@ -110,3 +121,38 @@ CREATE TABLE PagePermission(
     can_write BOOLEAN DEFAULT FALSE,
     FOREIGN KEY (grant_id) REFERENCES PageTableGrants(grant_id) ON DELETE CASCADE
 );
+
+-- =============================================================================
+-- VIEWS
+-- =============================================================================
+-- Two-tier permission resolution view (Page override takes priority over Book default)
+CREATE OR REPLACE VIEW v_EffectivePageGrants AS
+SELECT 
+    p.page_id,
+    p.book_id,
+    qt.table_id,
+    qt.table_name,
+    qt.db,
+    CASE 
+        WHEN ptg.grant_id IS NOT NULL THEN COALESCE(pp.can_read, FALSE)
+        WHEN btg.grant_id IS NOT NULL THEN btg.can_read
+        ELSE FALSE
+    END AS can_read,
+    CASE 
+        WHEN ptg.grant_id IS NOT NULL THEN COALESCE(pp.can_write, FALSE)
+        WHEN btg.grant_id IS NOT NULL THEN btg.can_write
+        ELSE FALSE
+    END AS can_write,
+    CASE 
+        WHEN ptg.grant_id IS NOT NULL THEN 'PAGE'
+        WHEN btg.grant_id IS NOT NULL THEN 'BOOK'
+        ELSE 'NONE'
+    END AS source_tier,
+    (ptg.grant_id IS NOT NULL) AS is_override,
+    ptg.grant_id AS page_grant_id,
+    btg.grant_id AS book_grant_id
+FROM Page p
+CROSS JOIN QueryableTables qt
+LEFT JOIN PageTableGrants ptg ON ptg.page_id = p.page_id AND ptg.table_id = qt.table_id
+LEFT JOIN PagePermission pp ON ptg.grant_id = pp.grant_id
+LEFT JOIN BookTableGrants btg ON btg.book_id = p.book_id AND btg.table_id = qt.table_id;

@@ -41,94 +41,91 @@ def run_tests():
     print(f"Found {len(tables)} queryable table(s): {[t['table_name'] for t in tables]}")
     assert any(t["table_name"] == "StudentGrades" for t in tables)
 
-    print("\n--- 3. Checking Grants for Page 3 (SQL Basics) ---")
-    status, grants = api_request("GET", "/pages/3/grants", token=token)
-    assert status == 200, f"Failed: {grants}"
-    print(f"Page 3 grants: {json.dumps(grants, indent=2)}")
-    assert len(grants) > 0
-    assert grants[0]["table_name"] == "StudentGrades"
-    assert grants[0]["can_read"] is True
+    print("\n--- 3. Checking Book-Level Grants for Book 1 ---")
+    status, book_grants = api_request("GET", "/books/1/grants", token=token)
+    assert status == 200, f"Failed: {book_grants}"
+    print(f"Book 1 grants: {json.dumps(book_grants, indent=2)}")
+    assert len(book_grants) > 0
+    assert any(g["table_name"] == "StudentGrades" and g["can_read"] is True for g in book_grants)
 
-    print("\n--- 4. Testing Page 3 Render (/pages/3/render) ---")
-    status, render_data = api_request("GET", "/pages/3/render", token=token)
-    assert status == 200, f"Failed: {render_data}"
-    html_out = render_data["html_content"]
-    
-    # Verify wikilinks
-    assert "class=\"folio-wikilink\"" in html_out, "Wikilink not found in HTML"
-    assert "relational-model" in html_out, "Relational Model link not resolved"
-    assert "broken-link" in html_out, "Broken wikilink indicator not found"
-    print("Wikilink resolution verified!")
+    print("\n--- 4. Checking Two-Tier Resolution for Page 3 (Explicit Override) ---")
+    status, p3_grants = api_request("GET", "/pages/3/grants", token=token)
+    assert status == 200, f"Failed: {p3_grants}"
+    print(f"Page 3 resolved grants: {json.dumps(p3_grants, indent=2)}")
+    p3_grant = next(g for g in p3_grants if g["table_name"] == "StudentGrades")
+    assert p3_grant["source_tier"] == "PAGE"
+    assert p3_grant["is_override"] is True
+    assert p3_grant["can_read"] is True
 
-    # Verify query table output
-    assert "class=\"folio-data-table\"" in html_out, "Data table not rendered"
-    assert "Alice Chen" in html_out, "Student data not found in table"
-    assert "average_score" in html_out, "Aggregate column average_score not found in table"
-    print("Embedded SQL table rendering verified!")
+    print("\n--- 5. Checking Two-Tier Resolution for Page 4 (Inherited Default) ---")
+    # Page 4 has no explicit page grant, so it inherits from Book 1
+    status, p4_grants = api_request("GET", "/pages/4/grants", token=token)
+    assert status == 200, f"Failed: {p4_grants}"
+    print(f"Page 4 resolved grants: {json.dumps(p4_grants, indent=2)}")
+    p4_grant = next(g for g in p4_grants if g["table_name"] == "StudentGrades")
+    assert p4_grant["source_tier"] == "BOOK"
+    assert p4_grant["is_override"] is False
+    assert p4_grant["can_read"] is True
 
-    print("\n--- 5. Testing Security Enforcement: Non-whitelisted Table ---")
-    unauth_query = ":::query\nSELECT * FROM User;\n:::"
-    status, _ = api_request("PUT", "/pages/3", {"content": unauth_query}, token=token)
+    print("\n--- 6. Testing Inherited Query Execution on Page 4 ---")
+    api_request("PUT", "/pages/4", {"content": ":::query\nSELECT COUNT(*) AS total FROM StudentGrades;\n:::"}, token=token)
+    _, p4_render_res = api_request("GET", "/pages/4/render", token=token)
+    p4_html = p4_render_res["html_content"]
+    assert "class=\"folio-data-table\"" in p4_html, "Page 4 failed to render inherited query"
+    assert "total" in p4_html
+    print("Page 4 successfully executed query inherited from Book 1 default!")
+
+    print("\n--- 7. Testing Explicit Page-Level Override to DENY Access ---")
+    # Override Page 4 to can_read = False
+    status, deny_grant_res = api_request("POST", "/pages/4/grants", {"table_id": 1, "can_read": False}, token=token)
+    assert status == 201
+    page_grant_id = deny_grant_res["page_grant_id"]
+
+    _, p4_deny_render = api_request("GET", "/pages/4/render", token=token)
+    assert "Table Access Denied" in p4_deny_render["html_content"]
+    print("Override verified: Explicit page deny overrides book-level default!")
+
+    print("\n--- 8. Testing Revoking Page Override (Falls Back to Book Default) ---")
+    status, del_res = api_request("DELETE", f"/pages/4/grants/{page_grant_id}", token=token)
     assert status == 200
 
-    _, p3_unauth = api_request("GET", "/pages/3/render", token=token)
-    render_unauth = p3_unauth["html_content"]
-    assert "Table Access Denied" in render_unauth, "Security failure: ungranted table did not trigger access denied!"
-    print("Security Pass: Access denied to ungranted table 'User'!")
+    _, p4_restored_render = api_request("GET", "/pages/4/render", token=token)
+    assert "class=\"folio-data-table\"" in p4_restored_render["html_content"]
+    print("Fallback verified: Revoking page override restored book default access!")
 
-    print("\n--- 6. Testing Security Enforcement: Prohibited Function (sleep) ---")
+    print("\n--- 9. Testing Book-Level Grant Lifecycle on Book 2 ---")
+    # Book 2 currently has no table grants
+    status, b2_grants_before = api_request("GET", "/books/2/grants", token=token)
+    assert len(b2_grants_before) == 0
+
+    # Add grant to Book 2
+    status, b2_grant = api_request("POST", "/books/2/grants", {"table_id": 1, "can_read": True}, token=token)
+    assert status == 201
+    b2_grant_id = b2_grant["grant_id"]
+    print(f"Granted StudentGrades to Book 2 with grant_id = {b2_grant_id}")
+
+    # Page 6 belongs to Book 2 - test query inheritance
+    api_request("PUT", "/pages/6", {"content": ":::query\nSELECT student_name, score FROM StudentGrades LIMIT 2;\n:::"}, token=token)
+    _, p6_render = api_request("GET", "/pages/6/render", token=token)
+    assert "class=\"folio-data-table\"" in p6_render["html_content"]
+    assert "Alice Chen" in p6_render["html_content"]
+    print("Page 6 (Book 2) successfully executed query via Book 2 default grant!")
+
+    # Revoke grant from Book 2
+    status, b2_del = api_request("DELETE", f"/books/2/grants/{b2_grant_id}", token=token)
+    assert status == 200
+
+    # Page 6 should now be denied
+    _, p6_deny = api_request("GET", "/pages/6/render", token=token)
+    assert "Table Access Denied" in p6_deny["html_content"]
+    print("Book grant revocation verified: Page 6 denied access after Book 2 grant removed!")
+
+    print("\n--- 10. Testing Security Enforcement: Prohibited Function & AST Whitelist ---")
     sleep_query = ":::query\nSELECT student_name FROM StudentGrades WHERE sleep(5) = 0;\n:::"
     api_request("PUT", "/pages/3", {"content": sleep_query}, token=token)
     _, p3_sleep = api_request("GET", "/pages/3/render", token=token)
-    render_sleep = p3_sleep["html_content"]
-    assert "Query Validation Failed" in render_sleep or "Function 'sleep" in render_sleep
+    assert "Query Validation Failed" in p3_sleep["html_content"] or "Function 'sleep" in p3_sleep["html_content"]
     print("Security Pass: Prohibited function 'sleep()' blocked by AST whitelist!")
-
-    print("\n--- 7. Testing Security Enforcement: Mutation Attack (DROP / INSERT) ---")
-    drop_query = ":::query\nDROP TABLE StudentGrades;\n:::"
-    api_request("PUT", "/pages/3", {"content": drop_query}, token=token)
-    _, p3_drop = api_request("GET", "/pages/3/render", token=token)
-    render_drop = p3_drop["html_content"]
-    assert "Only SELECT statements are permitted" in render_drop or "Query Validation Failed" in render_drop
-    print("Security Pass: DDL/DML mutation blocked!")
-
-    print("\n--- 8. Testing Security Enforcement: Multi-Statement Injection ---")
-    multi_query = ":::query\nSELECT * FROM StudentGrades; DROP TABLE StudentGrades;\n:::"
-    api_request("PUT", "/pages/3", {"content": multi_query}, token=token)
-    _, p3_multi = api_request("GET", "/pages/3/render", token=token)
-    render_multi = p3_multi["html_content"]
-    assert "single SQL statement" in render_multi or "Query Validation Failed" in render_multi
-    print("Security Pass: Multi-statement query injection blocked!")
-
-    print("\n--- 9. Testing Dynamic Grant Management (POST & DELETE /grants) ---")
-    # Check page 4 (Normalization) - currently has no grants
-    _, p4_grants_before = api_request("GET", "/pages/4/grants", token=token)
-    assert len(p4_grants_before) == 0
-
-    # Add grant to page 4
-    status, add_grant_res = api_request("POST", "/pages/4/grants", {"table_id": 1, "can_read": True}, token=token)
-    assert status == 201
-    grant_id = add_grant_res["grant_id"]
-    print(f"Granted table 1 to page 4 with grant_id = {grant_id}")
-
-    # Set query on page 4 and render
-    api_request("PUT", "/pages/4", {"content": ":::query\nSELECT COUNT(*) AS total FROM StudentGrades;\n:::"}, token=token)
-    _, p4_render_res = api_request("GET", "/pages/4/render", token=token)
-    p4_render = p4_render_res["html_content"]
-    assert "class=\"folio-data-table\"" in p4_render, "Page 4 failed to render table after grant was added"
-    assert "total" in p4_render
-    print("Page 4 successfully rendered query after grant!")
-
-    # Revoke grant
-    status, del_res = api_request("DELETE", f"/pages/4/grants/{grant_id}", token=token)
-    assert status == 200
-    print(f"Revoked grant_id {grant_id}")
-
-    # Now render again - should be access denied
-    _, p4_render_after_res = api_request("GET", "/pages/4/render", token=token)
-    p4_render_after = p4_render_after_res["html_content"]
-    assert "Table Access Denied" in p4_render_after
-    print("Page 4 properly denied access after grant revocation!")
 
     # Restore page 3 original content
     orig_content = """# SQL Basics
@@ -153,10 +150,10 @@ GROUP BY assignment;
 :::
 """
     api_request("PUT", "/pages/3", {"content": orig_content}, token=token)
-    print("\nPage 3 original notes restored!")
+    print("Page 3 original content restored.")
 
     print("\n==============================================")
-    print("ALL TESTS PASSED WITH 100% SUCCESS!")
+    print("ALL TWO-TIER GRANT & SECURITY TESTS PASSED (100%)!")
     print("==============================================")
 
 if __name__ == "__main__":

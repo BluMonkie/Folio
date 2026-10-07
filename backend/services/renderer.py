@@ -74,18 +74,16 @@ def execute_and_render_query(page_id: int, book_id: int, sql_text: str) -> str:
     if not is_valid:
         return render_error_block("Query Validation Failed", error_msg or "Invalid SQL query.")
 
-    # 2. Check Page-Level Table Grants
+    # 2. Check Table Grants via Database View (v_EffectivePageGrants)
     with get_db() as cursor:
         cursor.execute("""
-            SELECT LOWER(qt.table_name) AS table_name, COALESCE(pp.can_read, 0) AS can_read
-            FROM PageTableGrants ptg
-            JOIN QueryableTables qt ON ptg.table_id = qt.table_id
-            LEFT JOIN PagePermission pp ON ptg.grant_id = pp.grant_id
-            WHERE ptg.page_id = %s;
+            SELECT LOWER(table_name) AS table_name 
+            FROM v_EffectivePageGrants 
+            WHERE page_id = %s AND can_read = TRUE;
         """, (page_id,))
         grant_rows = cursor.fetchall()
 
-    allowed_tables = {row["table_name"] for row in grant_rows if row["can_read"] == 1}
+    allowed_tables = {row["table_name"] for row in grant_rows}
 
     for table in physical_tables:
         if table.lower() not in allowed_tables:
