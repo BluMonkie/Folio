@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
-import { useEditor, EditorContent } from "@tiptap/react";
+import { useEditor, EditorContent, ReactNodeViewRenderer, NodeViewWrapper, NodeViewContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import CodeBlock from "@tiptap/extension-code-block";
 import { Markdown } from "tiptap-markdown";
 
 interface VisualEditorProps {
@@ -8,6 +9,63 @@ interface VisualEditorProps {
   onChange: (markdown: string) => void;
   onSave?: () => void;
 }
+
+/**
+ * Preprocesses markdown to convert legacy :::query blocks into ```query code blocks,
+ * and strip out any previously mangled escapes (e.g. \* or \() inside queries.
+ */
+function preprocessForEditor(raw: string): string {
+  if (!raw) return "";
+  let res = raw.replace(
+    /:::+\s*query\s*([\s\S]*?)::+/gi,
+    (_match: string, sql: string) => {
+      const cleanSql = sql.replace(/\\([*()_`[\]])/g, (_m: string, ch: string) => ch).trim();
+      return `\n\n\`\`\`query\n${cleanSql}\n\`\`\`\n\n`;
+    }
+  );
+  return res;
+}
+
+/**
+ * Custom CodeBlock Node View keeping the exact warm beige ProseMirror look,
+ * with a small header indicating the language (or "SQL query").
+ */
+const CodeBlockComponent: React.FC<any> = ({ node, updateAttributes }) => {
+  const language = node.attrs.language || "";
+  const isSqlQuery = language === "query" || language === "sql-query";
+
+  return (
+    <NodeViewWrapper className="folio-code-card my-3">
+      {/* Small header bar on top */}
+      <div className="folio-code-header flex items-center justify-between">
+        {isSqlQuery ? (
+          <span className="font-bold text-[#8d4b00] text-[12px] tracking-wide">SQL query</span>
+        ) : (
+          <input
+            type="text"
+            contentEditable={false}
+            value={language}
+            onChange={(e) => updateAttributes({ language: e.target.value })}
+            placeholder="code"
+            className="bg-transparent border-none p-0 text-[12px] font-mono font-bold uppercase text-[#554336] focus:outline-none focus:text-[#1f1b17] w-32 placeholder:text-[#a8a29e]"
+            title="Code block language"
+          />
+        )}
+      </div>
+
+      {/* Code Area */}
+      <pre className="folio-code-pre">
+        <NodeViewContent as={"code" as any} />
+      </pre>
+    </NodeViewWrapper>
+  );
+};
+
+const CustomCodeBlock = CodeBlock.extend({
+  addNodeView() {
+    return ReactNodeViewRenderer(CodeBlockComponent);
+  },
+});
 
 export const VisualEditor: React.FC<VisualEditorProps> = ({
   content,
@@ -23,12 +81,17 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
         heading: {
           levels: [1, 2, 3],
         },
-        codeBlock: {},
+        codeBlock: false, // Replaced by CustomCodeBlock with light header
         bulletList: {},
         orderedList: {},
         bold: {},
         italic: {},
         strike: {},
+      }),
+      CustomCodeBlock.configure({
+        HTMLAttributes: {
+          class: "folio-code-block",
+        },
       }),
       Markdown.configure({
         html: true,
@@ -36,15 +99,25 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
         transformCopiedText: true,
       }),
     ],
-    content: content,
+    content: preprocessForEditor(content),
     editorProps: {
       attributes: {
         class: "ProseMirror prose max-w-none text-[#1f1b17] leading-relaxed text-[15px] focus:outline-none min-h-[420px] p-4 sm:p-8",
       },
     },
     onUpdate: ({ editor }) => {
-      let md = editor.storage.markdown?.getMarkdown?.() ?? "";
+      let md = (editor.storage as any).markdown?.getMarkdown?.() ?? "";
       md = md.replace(/\\\[\\\[/g, "[[").replace(/\\\]\\\]/g, "]]");
+      // Convert ```query blocks back into :::query blocks for storage and read mode
+      md = md.replace(/```(?:query|sql-query)\s*([\s\S]*?)```/gi, (_match: string, sql: string) => {
+        const cleanSql = sql.replace(/\\([*()_`[\]])/g, (_m: string, ch: string) => ch);
+        return `:::query\n${cleanSql.trim()}\n:::`;
+      });
+      // Also unescape any :::query blocks if present
+      md = md.replace(/:::+\s*query\s*([\s\S]*?)::+/gi, (_match: string, sql: string) => {
+        const cleanSql = sql.replace(/\\([*()_`[\]])/g, (_m: string, ch: string) => ch);
+        return `:::query\n${cleanSql.trim()}\n:::`;
+      });
       lastEmittedRef.current = md;
       onChange(md);
     },
@@ -58,7 +131,7 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
     if (editor.isFocused) return;
 
     lastEmittedRef.current = content;
-    editor.commands.setContent(content);
+    editor.commands.setContent(preprocessForEditor(content));
   }, [content, editor]);
 
   // Global Ctrl+S / Cmd+S shortcut inside editor
@@ -76,8 +149,25 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
   if (!editor) return null;
 
   const insertSqlBlock = () => {
-    const sample = `\n\n:::query\nSELECT * FROM QueryableTables LIMIT 10;\n:::\n\n`;
-    editor.chain().focus().insertContent(sample).run();
+    editor
+      .chain()
+      .focus()
+      .insertContent([
+        {
+          type: "codeBlock",
+          attrs: { language: "query" },
+          content: [
+            {
+              type: "text",
+              text: "SELECT * FROM QueryableTables LIMIT 10;",
+            },
+          ],
+        },
+        {
+          type: "paragraph",
+        },
+      ])
+      .run();
   };
 
   const insertWikilink = () => {

@@ -1,5 +1,6 @@
-import React, { useState } from "react";
-import type { PageGrantItem, BacklinkItem, EditHistoryItem, TagItem } from "../api";
+import React, { useState, useEffect } from "react";
+import type { PageGrantItem, BacklinkItem, EditHistoryItem, TagItem, QueryableTableItem } from "../api";
+import { api } from "../api";
 
 interface InspectorProps {
   isOpen: boolean;
@@ -11,6 +12,8 @@ interface InspectorProps {
   onNavigatePage: (pageId: number) => void;
   tab?: "grants" | "backlinks" | "history" | "tags";
   onTabChange?: (tab: "grants" | "backlinks" | "history" | "tags") => void;
+  activePageId?: number | null;
+  onGrantsUpdated?: () => void;
 }
 
 export const Inspector: React.FC<InspectorProps> = ({
@@ -23,10 +26,56 @@ export const Inspector: React.FC<InspectorProps> = ({
   onNavigatePage,
   tab,
   onTabChange,
+  activePageId,
+  onGrantsUpdated,
 }) => {
   const [localTab, setLocalTab] = useState<"grants" | "backlinks" | "history" | "tags">("grants");
   const activeTab = tab ?? localTab;
   const setActiveTab = onTabChange ?? setLocalTab;
+
+  // Page Grant Controls state
+  const [isAddingGrant, setIsAddingGrant] = useState(false);
+  const [queryableTables, setQueryableTables] = useState<QueryableTableItem[]>([]);
+  const [selectedTableId, setSelectedTableId] = useState<number | null>(null);
+  const [canRead, setCanRead] = useState(true);
+  const [grantLoading, setGrantLoading] = useState(false);
+
+  useEffect(() => {
+    if (isOpen && activeTab === "grants") {
+      api.listQueryableTables().then((tables) => {
+        setQueryableTables(tables);
+        if (tables.length > 0 && selectedTableId === null) {
+          setSelectedTableId(tables[0].table_id);
+        }
+      }).catch(console.error);
+    }
+  }, [isOpen, activeTab]);
+
+  const handleAddPageGrant = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activePageId || !selectedTableId) return;
+    setGrantLoading(true);
+    try {
+      await api.grantTableToPage(activePageId, selectedTableId, canRead);
+      setIsAddingGrant(false);
+      if (onGrantsUpdated) onGrantsUpdated();
+    } catch (err: any) {
+      alert(`Grant failed: ${err.message || err}`);
+    } finally {
+      setGrantLoading(false);
+    }
+  };
+
+  const handleRevokePageGrant = async (grantId: number, tableName: string) => {
+    if (!activePageId) return;
+    if (!window.confirm(`Revoke page-level override for '${tableName}'?`)) return;
+    try {
+      await api.revokePageGrant(activePageId, grantId);
+      if (onGrantsUpdated) onGrantsUpdated();
+    } catch (err: any) {
+      alert(`Revoke failed: ${err.message || err}`);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -100,14 +149,75 @@ export const Inspector: React.FC<InspectorProps> = ({
         {/* TAB 1: ACCESS */}
         {activeTab === "grants" && (
           <div className="space-y-3">
+            {/* Add Grant Toggle / Form */}
+            <div className="flex items-center justify-between pb-1">
+              <span className="text-xs font-bold text-[#554336] uppercase tracking-wider">
+                Table Permissions
+              </span>
+              {activePageId && (
+                <button
+                  type="button"
+                  onClick={() => setIsAddingGrant(!isAddingGrant)}
+                  className="text-xs text-[#8d4b00] font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[15px]">
+                    {isAddingGrant ? "close" : "add"}
+                  </span>
+                  <span>{isAddingGrant ? "Cancel" : "Add Grant"}</span>
+                </button>
+              )}
+            </div>
+
+            {isAddingGrant && activePageId && (
+              <form onSubmit={handleAddPageGrant} className="p-3 bg-white border border-[#d97706]/40 rounded-xl shadow-xs space-y-2.5 animate-fadeIn text-xs">
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#554336] mb-1">
+                    Select Queryable Table
+                  </label>
+                  <select
+                    value={selectedTableId ?? ""}
+                    onChange={(e) => setSelectedTableId(Number(e.target.value))}
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-[#e7e5e4] font-mono text-xs focus:outline-none focus:border-[#d97706]"
+                  >
+                    {queryableTables.map((t) => (
+                      <option key={t.table_id} value={t.table_id}>
+                        {t.table_name} ({t.db})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <label className="flex items-center gap-1.5 text-[11px] text-[#554336] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={canRead}
+                      onChange={(e) => setCanRead(e.target.checked)}
+                    />
+                    <span>Allow SELECT</span>
+                  </label>
+
+                  <button
+                    type="submit"
+                    disabled={grantLoading || queryableTables.length === 0}
+                    className="px-3 py-1 rounded-lg bg-[#8d4b00] hover:bg-[#723c00] text-white font-semibold text-xs transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {grantLoading ? "Granting..." : "Grant"}
+                  </button>
+                </div>
+              </form>
+            )}
+
             {grants.length === 0 ? (
-              <div className="text-center py-6 text-[#78716c] italic">No special data permissions configured.</div>
+              <div className="text-center py-6 text-[#78716c] italic text-xs">
+                No table permissions configured for this note.
+              </div>
             ) : (
               grants.map((g, idx) => (
                 <div key={idx} className="bg-white border border-[#e7e5e4] rounded-xl p-3 shadow-2xs space-y-2">
                   <div className="flex items-center justify-between">
                     <div>
-                      <span className="font-semibold text-[#1f1b17]">{g.table_name}</span>
+                      <span className="font-semibold text-[#1f1b17] font-mono">{g.table_name}</span>
                     </div>
                     <span
                       className={`folio-pill-badge text-[10px] uppercase tracking-wider ${
@@ -116,17 +226,26 @@ export const Inspector: React.FC<InspectorProps> = ({
                           : "bg-[#006a61]/15 text-[#006a61] border border-[#006a61]/30"
                       }`}
                     >
-                      {g.source_tier === "PAGE" ? "Custom Note Access" : "Inherited from Book"}
+                      {g.source_tier === "PAGE" ? "Note Override" : "Inherited from Book"}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-1 pt-1 text-[11px] text-center border-t border-[#f0e6e0]">
+                  <div className="flex items-center justify-between pt-1 text-[11px] border-t border-[#f0e6e0]">
                     <div className={g.can_read ? "text-[#006a61] font-medium" : "text-[#78716c] opacity-50"}>
-                      Read: {g.can_read ? "✓" : "✗"}
+                      Read: {g.can_read ? "Allowed ✓" : "Blocked ✗"}
                     </div>
-                    <div className={g.can_write ? "text-[#006a61] font-medium" : "text-[#78716c] opacity-50"}>
-                      Write: {g.can_write ? "✓" : "✗"}
-                    </div>
+
+                    {g.source_tier === "PAGE" && g.page_grant_id && (
+                      <button
+                        type="button"
+                        onClick={() => handleRevokePageGrant(g.page_grant_id!, g.table_name)}
+                        className="text-red-600 hover:text-red-700 hover:underline flex items-center gap-0.5 cursor-pointer text-[10px]"
+                        title="Revoke page override"
+                      >
+                        <span className="material-symbols-outlined text-[13px]">delete</span>
+                        <span>Revoke</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               ))

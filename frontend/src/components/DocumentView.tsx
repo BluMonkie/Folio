@@ -232,45 +232,45 @@ export const DocumentView: React.FC<DocumentViewProps> = ({
 
         {/* Central Controls: Mode Switcher & Save Action */}
         <div className="flex items-center flex-wrap gap-2">
-          {/* Dual-Mode Editor Switcher */}
-          <div className="flex items-center p-0.5 bg-[#f0e6e0] rounded-xl border border-[#e7e5e4] text-xs font-semibold">
-            <button
-              type="button"
-              onClick={() => setEditorMode("read")}
-              className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-                editorMode === "read"
-                  ? "bg-white text-[#8d4b00] shadow-2xs font-semibold"
-                  : "text-[#554336] hover:text-[#1f1b17]"
-              }`}
-              title="Reading View (Ctrl+E)"
-            >
-              Read
-            </button>
+          {/* Editor Switcher Tabs - Only visible while editing is active */}
+          {editorMode !== "read" ? (
+            <div className="flex items-center p-0.5 bg-[#f0e6e0] rounded-xl border border-[#e7e5e4] text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setEditorMode("visual")}
+                className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                  editorMode === "visual"
+                    ? "bg-white text-[#8d4b00] shadow-2xs font-semibold"
+                    : "text-[#554336] hover:text-[#1f1b17]"
+                }`}
+                title="Visual Editor"
+              >
+                Visual
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditorMode("split")}
+                className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                  editorMode === "split"
+                    ? "bg-white text-[#8d4b00] shadow-2xs font-semibold"
+                    : "text-[#554336] hover:text-[#1f1b17]"
+                }`}
+                title="Split Editor"
+              >
+                Split
+              </button>
+            </div>
+          ) : (
             <button
               type="button"
               onClick={() => setEditorMode("visual")}
-              className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-                editorMode === "visual"
-                  ? "bg-white text-[#8d4b00] shadow-2xs font-semibold"
-                  : "text-[#554336] hover:text-[#1f1b17]"
-              }`}
-              title="Visual Editor"
+              className="flex items-center gap-1.5 h-8 px-3.5 rounded-lg text-xs font-semibold bg-[#fcf2eb] hover:bg-[#f6ece6] border border-[#e7e5e4] text-[#8d4b00] shadow-2xs transition-colors cursor-pointer"
+              title="Edit Note (Ctrl+E)"
             >
-              Visual
+              <span className="material-symbols-outlined text-[16px]">edit</span>
+              <span>Edit Note</span>
             </button>
-            <button
-              type="button"
-              onClick={() => setEditorMode("split")}
-              className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-                editorMode === "split"
-                  ? "bg-white text-[#8d4b00] shadow-2xs font-semibold"
-                  : "text-[#554336] hover:text-[#1f1b17]"
-              }`}
-              title="Split Editor"
-            >
-              Split
-            </button>
-          </div>
+          )}
 
           {/* Editing Mode Actions */}
           {editorMode !== "read" && (

@@ -6,7 +6,10 @@ import mistune
 from backend.database import get_db, get_runner_db
 from backend.services.query_validator import validate_select_query
 
-QUERY_BLOCK_REGEX = re.compile(r":::\s*query\s*([\s\S]*?):::", re.IGNORECASE)
+QUERY_BLOCK_REGEX = re.compile(
+    r"(?:(?:::+\s*query\s*([\s\S]*?)::+)|(?:```(?:query|sql-query)\s*([\s\S]*?)```))",
+    re.IGNORECASE
+)
 WIKILINK_REGEX = re.compile(r"(?<!\\\\)(?:\\)?\[(?:\\)?\[([^\]|\\]+)(?:\|([^\]\\]+))?(?:\\)?\](?:\\)?\]")
 
 def render_error_block(title: str, message: str) -> str:
@@ -136,6 +139,24 @@ def render_wikilinks(book_id: int, book_slug: str, text: str) -> str:
 
     return WIKILINK_REGEX.sub(replace_link, text)
 
+CODE_BLOCK_HTML_REGEX = re.compile(
+    r'<pre[^>]*><code(?:\s+class=[\"\']language-([^\"\'>\s]*)[\"\'])?[^>]*>([\s\S]*?)</code></pre>',
+    re.IGNORECASE
+)
+
+def format_rendered_code_blocks(html_text: str) -> str:
+    """Wraps rendered <pre><code> blocks in .folio-code-card with language header."""
+    def replacer(m):
+        lang = (m.group(1) or "code").strip().upper()
+        code_body = m.group(2)
+        return (
+            f'<div class="folio-code-card">'
+            f'<div class="folio-code-header">{html.escape(lang)}</div>'
+            f'<pre class="folio-code-pre"><code>{code_body}</code></pre>'
+            f'</div>'
+        )
+    return CODE_BLOCK_HTML_REGEX.sub(replacer, html_text)
+
 def render_page_content(page_id: int, book_id: int, book_slug: str, raw_markdown: str) -> str:
     """
     Processes raw page markdown into full HTML:
@@ -152,7 +173,7 @@ def render_page_content(page_id: int, book_id: int, book_slug: str, raw_markdown
 
     def query_replacer(match):
         nonlocal counter
-        query_sql = match.group(1).strip()
+        query_sql = (match.group(1) or match.group(2) or "").strip()
         rendered_html = execute_and_render_query(page_id, book_id, query_sql)
         token = f"<!-- FOLIO_QUERY_BLOCK_{counter} -->"
         query_placeholders[token] = rendered_html
@@ -167,6 +188,7 @@ def render_page_content(page_id: int, book_id: int, book_slug: str, raw_markdown
 
     # 3. Convert markdown to HTML
     rendered_html = mistune.html(processed_md)
+    rendered_html = format_rendered_code_blocks(rendered_html)
 
     # 4. Substitute query placeholders with executed query HTML
     for token, block_html in query_placeholders.items():

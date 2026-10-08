@@ -132,18 +132,83 @@ export interface SearchResultItem {
   snippet?: string | null;
 }
 
+export interface TableItem {
+  table_id: number;
+  table_name: string;
+  db: string;
+  is_system: boolean;
+  row_count: number;
+  column_count: number;
+}
+
+export interface ColumnSchemaItem {
+  name: string;
+  data_type: string;
+  full_type: string;
+  nullable: boolean;
+  is_primary_key: boolean;
+  default: string | null;
+  extra: string | null;
+}
+
+export interface TableSchemaResponse {
+  table_name: string;
+  db: string;
+  is_system: boolean;
+  primary_keys: string[];
+  columns: ColumnSchemaItem[];
+}
+
+export interface TableDataResponse {
+  table_name: string;
+  total_rows: number;
+  page: number;
+  limit: number;
+  columns: string[];
+  rows: Record<string, any>[];
+}
+
+export interface BookGrantItem {
+  grant_id: number;
+  book_id: number;
+  table_id: number;
+  table_name: string;
+  db: string;
+  can_read: boolean;
+  can_write: boolean;
+}
+
+export interface QueryableTableItem {
+  table_id: number;
+  table_name: string;
+  db: string;
+}
+
 // -----------------------------------------------------------------------------
 // API Services
 // -----------------------------------------------------------------------------
 export const api = {
   // Auth
-  async login(email: string, password: string):Promise<{ access_token: string; user: UserProfile }> {
+  async login(email: string, password: string): Promise<{ access_token: string; user: UserProfile }> {
     const data = await request<{ access_token: string; user: UserProfile }>("/auth/login/json", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
     setToken(data.access_token);
     return data;
+  },
+
+  async signup(name: string, email: string, password: string): Promise<{ access_token: string; user: UserProfile }> {
+    const data = await request<{ access_token: string; user: UserProfile }>("/auth/signup", {
+      method: "POST",
+      body: JSON.stringify({ name, email, password }),
+    });
+    setToken(data.access_token);
+    return data;
+  },
+
+  logout(): void {
+    removeToken();
   },
 
   async getMe(): Promise<UserProfile> {
@@ -236,5 +301,134 @@ export const api = {
     const params = new URLSearchParams({ q: query });
     if (bookId) params.append("book_id", bookId.toString());
     return request(`/search?${params.toString()}`);
+  },
+
+  // Tables & Data Studio
+  async listTables(): Promise<TableItem[]> {
+    return request<TableItem[]>("/tables");
+  },
+
+  async getTableSchema(tableName: string): Promise<TableSchemaResponse> {
+    return request<TableSchemaResponse>(`/tables/${tableName}/schema`);
+  },
+
+  async getTableData(
+    tableName: string,
+    page = 1,
+    limit = 25,
+    sortBy?: string,
+    sortDir = "asc",
+    search?: string
+  ): Promise<TableDataResponse> {
+    const params = new URLSearchParams({
+      page: page.toString(),
+      limit: limit.toString(),
+      sort_dir: sortDir,
+    });
+    if (sortBy) params.append("sort_by", sortBy);
+    if (search) params.append("search", search);
+    return request<TableDataResponse>(`/tables/${tableName}/data?${params.toString()}`);
+  },
+
+  async createTable(
+    tableName: string,
+    columns: { name: string; type: string; primary_key?: boolean; auto_increment?: boolean; nullable?: boolean; default?: string }[]
+  ): Promise<any> {
+    return request("/tables", {
+      method: "POST",
+      body: JSON.stringify({ table_name: tableName, columns }),
+    });
+  },
+
+  async addColumn(
+    tableName: string,
+    column: { name: string; type: string; nullable?: boolean; default?: string }
+  ): Promise<any> {
+    return request(`/tables/${tableName}/columns`, {
+      method: "POST",
+      body: JSON.stringify(column),
+    });
+  },
+
+  async dropColumn(tableName: string, columnName: string): Promise<any> {
+    return request(`/tables/${tableName}/columns/${columnName}`, {
+      method: "DELETE",
+    });
+  },
+
+  async insertRow(tableName: string, data: Record<string, any>): Promise<any> {
+    return request(`/tables/${tableName}/rows`, {
+      method: "POST",
+      body: JSON.stringify({ data }),
+    });
+  },
+
+  async updateRow(tableName: string, primaryKey: Record<string, any>, data: Record<string, any>): Promise<any> {
+    return request(`/tables/${tableName}/rows`, {
+      method: "PUT",
+      body: JSON.stringify({ primary_key: primaryKey, data }),
+    });
+  },
+
+  async deleteRow(tableName: string, primaryKey: Record<string, any>): Promise<any> {
+    return request(`/tables/${tableName}/rows`, {
+      method: "DELETE",
+      body: JSON.stringify({ primary_key: primaryKey }),
+    });
+  },
+
+  async importCsv(tableName: string, csvText: string): Promise<any> {
+    return request(`/tables/${tableName}/import-csv`, {
+      method: "POST",
+      body: JSON.stringify({ csv_text: csvText }),
+    });
+  },
+
+  async createTableFromCsv(tableName: string, csvText: string): Promise<any> {
+    return request("/tables/create-from-csv", {
+      method: "POST",
+      body: JSON.stringify({ table_name: tableName, csv_text: csvText }),
+    });
+  },
+
+  async dropTable(tableName: string): Promise<any> {
+    return request(`/tables/${tableName}`, {
+      method: "DELETE",
+    });
+  },
+
+  // Grants Management
+  async listQueryableTables(): Promise<QueryableTableItem[]> {
+    return request<QueryableTableItem[]>("/queryable-tables");
+  },
+
+  async listBookGrants(bookId: number): Promise<BookGrantItem[]> {
+    return request<BookGrantItem[]>(`/books/${bookId}/grants`);
+  },
+
+  async grantTableToBook(bookId: number, tableId: number, canRead = true, canWrite = false): Promise<BookGrantItem> {
+    return request<BookGrantItem>(`/books/${bookId}/grants`, {
+      method: "POST",
+      body: JSON.stringify({ table_id: tableId, can_read: canRead, can_write: canWrite }),
+    });
+  },
+
+  async revokeBookGrant(bookId: number, grantId: number): Promise<{ message: string }> {
+    return request<{ message: string }>(`/books/${bookId}/grants/${grantId}`, {
+      method: "DELETE",
+    });
+  },
+
+  async grantTableToPage(pageId: number, tableId: number, canRead = true, canWrite = false): Promise<PageGrantItem> {
+    return request<PageGrantItem>(`/pages/${pageId}/grants`, {
+      method: "POST",
+      body: JSON.stringify({ table_id: tableId, can_read: canRead, can_write: canWrite }),
+    });
+  },
+
+  async revokePageGrant(pageId: number, grantId: number): Promise<{ message: string }> {
+    return request<{ message: string }>(`/pages/${pageId}/grants/${grantId}`, {
+      method: "DELETE",
+    });
   },
 };

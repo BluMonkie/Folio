@@ -29,8 +29,9 @@ interface SidebarProps {
   onTogglePin?: (pageId: number) => void;
   onUnpinPage: (pageId: number) => void;
   onCloseAllPinned: () => void;
-  activeView: "bookshelf" | "document";
-  onChangeView: (view: "bookshelf" | "document") => void;
+  activeView: "bookshelf" | "document" | "data";
+  onChangeView: (view: "bookshelf" | "document" | "data") => void;
+  onManageBookGrants?: (book: Book) => void;
   onCreatePage: (title: string, parentId?: number | null) => void;
   onCreateBook: () => void;
   isOpen: boolean;
@@ -71,6 +72,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCloseAllPinned,
   activeView,
   onChangeView,
+  onManageBookGrants,
   onCreatePage,
   onCreateBook,
   isOpen,
@@ -612,6 +614,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <span className="material-symbols-outlined text-[19px]">article</span>
                       <span>Document View</span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => onChangeView("data")}
+                      className={`w-full h-10 flex items-center gap-2.5 px-3 rounded-lg text-sm transition-colors text-left cursor-pointer ${
+                        activeView === "data"
+                          ? "bg-white text-[#8d4b00] shadow-2xs font-semibold border border-[#e7e5e4]"
+                          : "text-[#374151] hover:text-[#111827] hover:bg-[#f6ece6] font-medium"
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-[19px]">dataset</span>
+                      <span>Data Tables</span>
+                    </button>
                   </nav>
                 </div>
 
@@ -991,7 +1005,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <span>New Note in Book</span>
             </button>
 
-            {/* 3. Rename Book */}
+            {/* 3. Manage Data Grants */}
+            <button
+              onClick={() => {
+                if (onManageBookGrants) onManageBookGrants(bookContextMenu.book);
+                setBookContextMenu(null);
+              }}
+              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left hover:bg-[#f6ece6] transition-colors cursor-pointer text-[#1f1b17]"
+            >
+              <span className="material-symbols-outlined text-[17px] text-[#006a61]">verified_user</span>
+              <span>Manage Data Grants</span>
+            </button>
+
+            {/* 4. Rename Book */}
             <button
               onClick={() => {
                 setRenamingBook({ bookId: bookContextMenu.book.book_id, title: bookContextMenu.book.title });
@@ -1003,7 +1029,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <span>Rename Book</span>
             </button>
 
-            {/* 4. Copy Book Reference */}
+            {/* 5. Copy Book Reference */}
             <button
               onClick={() => {
                 navigator.clipboard.writeText(`[[${bookContextMenu.book.title}]]`);

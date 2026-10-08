@@ -33,11 +33,11 @@ export const SplitEditor: React.FC<SplitEditorProps> = ({
       return "<p class='text-[#78716c] italic'>Start typing markdown on the left...</p>";
     }
 
-    // Preprocess :::query ... ::: blocks into live visual preview cards
+    // Preprocess :::query ... ::: and ```query ... ``` blocks into live visual preview cards
     let preprocessed = content.replace(
-      /:::query\s*([\s\S]*?):::/g,
-      (_match, sqlQuery) => {
-        const trimmedSql = sqlQuery.trim();
+      /(?:(?:::+\s*query\s*([\s\S]*?)::+)|(?:```(?:query|sql-query)\s*([\s\S]*?)```))/gi,
+      (_match, q1, q2) => {
+        const trimmedSql = (q1 || q2 || "").trim();
         return `\n\n<div class="folio-query-box">
           <div class="folio-query-header">
             <span class="folio-badge folio-badge-info">SQL QUERY BLOCK</span>
@@ -59,7 +59,18 @@ export const SplitEditor: React.FC<SplitEditorProps> = ({
     );
 
     try {
-      return marked.parse(preprocessed, { gfm: true, breaks: true }) as string;
+      let parsed = marked.parse(preprocessed, { gfm: true, breaks: true }) as string;
+      parsed = parsed.replace(
+        /<pre[^>]*><code(?:\s+class="language-([^">]+)")?[^>]*>([\s\S]*?)<\/code><\/pre>/gi,
+        (_match, lang, code) => {
+          const langDisplay = (lang || "code").trim().toUpperCase();
+          return `<div class="folio-code-card">
+            <div class="folio-code-header">${langDisplay}</div>
+            <pre class="folio-code-pre"><code>${code}</code></pre>
+          </div>`;
+        }
+      );
+      return parsed;
     } catch (err) {
       return `<pre class="text-red-600">Markdown Parse Error: ${err}</pre>`;
     }

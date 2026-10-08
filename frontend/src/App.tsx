@@ -9,12 +9,16 @@ import type {
   EditHistoryItem, 
   TagItem 
 } from "./api";
-import { api } from "./api";
+import { api, getToken } from "./api";
 import { Sidebar, type PinnedPageItem } from "./components/Sidebar";
 import { Bookshelf } from "./components/Bookshelf";
 import { DocumentView } from "./components/DocumentView";
 import { Inspector } from "./components/Inspector";
 import { SearchModal } from "./components/SearchModal";
+import { AuthScreen } from "./components/AuthScreen";
+import { UserAccountMenu } from "./components/UserAccountMenu";
+import { DataStudio } from "./components/DataStudio";
+import { BookGrantsModal } from "./components/BookGrantsModal";
 
 interface RecentPageItem {
   page_id: number;
@@ -28,6 +32,7 @@ interface RecentPageItem {
 
 export function App() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [authChecking, setAuthChecking] = useState(true);
   const [books, setBooks] = useState<Book[]>([]);
   const [activeBook, setActiveBook] = useState<Book | null>(null);
   const [selectedSidebarBook, setSelectedSidebarBook] = useState<Book | null>(null);
@@ -37,9 +42,10 @@ export function App() {
   const [recentPages, setRecentPages] = useState<RecentPageItem[]>([]);
   const [pinnedPages, setPinnedPages] = useState<PinnedPageItem[]>([]);
   
-  // Navigation View State: 'bookshelf' or 'document'
-  const [activeView, setActiveView] = useState<"bookshelf" | "document">("bookshelf");
+  // Navigation View State: 'bookshelf', 'document', or 'data'
+  const [activeView, setActiveView] = useState<"bookshelf" | "document" | "data">("bookshelf");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [managingGrantsBook, setManagingGrantsBook] = useState<Book | null>(null);
 
   // Inspector Drawer State
   const [grants, setGrants] = useState<PageGrantItem[]>([]);
@@ -90,21 +96,52 @@ export function App() {
     }
   }, []);
 
-  // 2. Initial Authentication & User Setup
-  const authenticateUser = useCallback(async (email = "alice@example.com") => {
-    try {
-      const auth = await api.login(email, "password123");
-      setCurrentUser(auth.user);
-      await loadBooks();
-    } catch (err) {
-      console.error("Auth failed:", err);
-    }
+  // 2. Authentication Initialization (Restore existing session or prompt for login)
+  useEffect(() => {
+    const initAuth = async () => {
+      const token = getToken();
+      if (token) {
+        try {
+          const user = await api.getMe();
+          setCurrentUser(user);
+          await loadBooks();
+        } catch (err) {
+          console.error("Session verification failed, logging out:", err);
+          api.logout();
+          setCurrentUser(null);
+        }
+      } else {
+        setCurrentUser(null);
+      }
+      setAuthChecking(false);
+    };
+
+    initAuth();
   }, [loadBooks]);
 
-  useEffect(() => {
-    authenticateUser();
+  // Handle successful login or signup from AuthScreen
+  const handleAuthSuccess = async (user: UserProfile) => {
+    setCurrentUser(user);
+    await loadBooks();
+  };
 
-    // Global ⌘K / Ctrl+K & ⌘N / Ctrl+N listener
+  // Handle User Log Out
+  const handleLogout = () => {
+    api.logout();
+    setCurrentUser(null);
+    setBooks([]);
+    setActiveBook(null);
+    setSelectedSidebarBook(null);
+    setPageTree([]);
+    setActivePageId(null);
+    setPageData(null);
+    setRecentPages([]);
+    setPinnedPages([]);
+    setActiveView("bookshelf");
+  };
+
+  // Global ⌘K / Ctrl+K & ⌘N / Ctrl+N listener
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -117,7 +154,7 @@ export function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [authenticateUser]);
+  }, []);
 
   // 3. Load Page Tree when activeBook changes
   useEffect(() => {
@@ -394,6 +431,23 @@ export function App() {
     }
   };
 
+  // Render Auth Checking Splash
+  if (authChecking) {
+    return (
+      <div className="min-h-screen w-full flex flex-col items-center justify-center bg-[#fdf9f6] text-[#1f1b17]">
+        <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#8d4b00] to-[#b45309] text-white flex items-center justify-center shadow-md animate-pulse mb-3">
+          <span className="material-symbols-outlined text-[24px]">menu_book</span>
+        </div>
+        <div className="text-xs font-semibold text-[#8d4b00] animate-pulse">Loading Folio...</div>
+      </div>
+    );
+  }
+
+  // Render Login / Signup Screen if user is not authenticated
+  if (!currentUser) {
+    return <AuthScreen onAuthSuccess={handleAuthSuccess} />;
+  }
+
   return (
     <div className="flex h-screen bg-[#fff8f5] text-[#1f1b17] overflow-hidden font-sans">
       {/* 1. Left Editorial Sidebar */}
@@ -417,6 +471,7 @@ export function App() {
         onCloseAllPinned={handleCloseAllPinned}
         activeView={activeView}
         onChangeView={(view) => setActiveView(view)}
+        onManageBookGrants={(book) => setManagingGrantsBook(book)}
         onCreatePage={handleCreatePage}
         onCreateBook={() => setIsCreateBookOpen(true)}
         isOpen={isSidebarOpen}
@@ -444,11 +499,13 @@ export function App() {
               </button>
             )}
 
-            {/* Top Bar Title: Just display the book name */}
+            {/* Top Bar Title */}
             <div className="flex items-center min-w-0">
               <span className="font-semibold text-base text-[#1f1b17] truncate">
                 {activeView === "bookshelf"
                   ? "Bookshelf & Library"
+                  : activeView === "data"
+                  ? "Data Explorer & Tables"
                   : activeBook?.title || "Document View"}
               </span>
             </div>
@@ -468,6 +525,21 @@ export function App() {
 
           {/* Action Icons */}
           <div className="flex items-center gap-1.5">
+            {/* Quick Data Tables button */}
+            <button
+              type="button"
+              onClick={() => setActiveView(activeView === "data" ? "bookshelf" : "data")}
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                activeView === "data"
+                  ? "bg-[#8d4b00] text-white shadow-xs"
+                  : "bg-[#f0e6e0] hover:bg-[#eae1da] text-[#554336]"
+              }`}
+              title="Toggle Data Explorer & MySQL Tables"
+            >
+              <span className="material-symbols-outlined text-[16px]">dataset</span>
+              <span className="hidden sm:inline">Data Tables</span>
+            </button>
+
             {activeView === "document" ? (
               <>
                 <button
@@ -490,7 +562,7 @@ export function App() {
                   <span className="material-symbols-outlined text-[18px]">dock_to_left</span>
                 </button>
               </>
-            ) : (
+            ) : activeView === "bookshelf" ? (
               <button
                 onClick={() => {
                   if (activePageId) setActiveView("document");
@@ -500,45 +572,63 @@ export function App() {
                 <span className="material-symbols-outlined text-[16px]">article</span>
                 <span>Open Current Note</span>
               </button>
+            ) : (
+              <button
+                onClick={() => setActiveView("bookshelf")}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-[#f6ece6] text-[#554336] text-xs font-medium transition-colors cursor-pointer"
+                title="Return to Bookshelf view"
+              >
+                <span className="material-symbols-outlined text-[16px]">dashboard</span>
+                <span>Bookshelf</span>
+              </button>
             )}
+
+            <div className="w-px h-5 bg-[#e7e5e4] mx-1" />
+
+            {/* Top Right Accounts Button with hover user info & logout */}
+            <UserAccountMenu user={currentUser} onLogout={handleLogout} />
           </div>
         </header>
 
         {/* Dynamic Body Canvas Slot */}
-        <div className="flex-1 overflow-y-auto px-6 sm:px-10 py-6">
-          <div className="max-w-5xl mx-auto">
-            {activeView === "bookshelf" ? (
-              <Bookshelf
-                currentUser={currentUser}
-                books={books}
-                recentPages={recentPages}
-                onSelectBook={(book) => {
-                  handleSelectBook(book);
-                  setActiveView("document");
-                }}
-                onSelectPage={handleSelectPage}
-                onCreateBook={() => setIsCreateBookOpen(true)}
-                onCreatePage={handleCreateQuickNote}
-                onDeleteBook={handleDeleteBook}
-                onRenameBook={handleRenameBook}
-              />
-            ) : (
-              <DocumentView
-                pageData={pageData}
-                book={activeBook}
-                pageTree={pageTree}
-                onSelectBook={handleSelectBook}
-                loading={loadingPage}
-                isInspectorOpen={isInspectorOpen}
-                onToggleInspector={() => setIsInspectorOpen((prev) => !prev)}
-                onNavigatePage={handleSelectPage}
-                onBackToBookshelf={() => setActiveView("bookshelf")}
-                isPinned={Boolean(activePageId && pinnedPages.some((p) => p.page_id === activePageId))}
-                onTogglePin={handleTogglePin}
-                onSaveContent={handleSavePageContent}
-              />
-            )}
-          </div>
+        <div className={`flex-1 overflow-hidden ${activeView === "data" ? "p-0" : "overflow-y-auto px-6 sm:px-10 py-6"}`}>
+          {activeView === "data" ? (
+            <DataStudio onBackToBookshelf={() => setActiveView("bookshelf")} />
+          ) : (
+            <div className="max-w-5xl mx-auto">
+              {activeView === "bookshelf" ? (
+                <Bookshelf
+                  currentUser={currentUser}
+                  books={books}
+                  recentPages={recentPages}
+                  onSelectBook={(book) => {
+                    handleSelectBook(book);
+                    setActiveView("document");
+                  }}
+                  onSelectPage={handleSelectPage}
+                  onCreateBook={() => setIsCreateBookOpen(true)}
+                  onCreatePage={handleCreateQuickNote}
+                  onDeleteBook={handleDeleteBook}
+                  onRenameBook={handleRenameBook}
+                />
+              ) : (
+                <DocumentView
+                  pageData={pageData}
+                  book={activeBook}
+                  pageTree={pageTree}
+                  onSelectBook={handleSelectBook}
+                  loading={loadingPage}
+                  isInspectorOpen={isInspectorOpen}
+                  onToggleInspector={() => setIsInspectorOpen((prev) => !prev)}
+                  onNavigatePage={handleSelectPage}
+                  onBackToBookshelf={() => setActiveView("bookshelf")}
+                  isPinned={Boolean(activePageId && pinnedPages.some((p) => p.page_id === activePageId))}
+                  onTogglePin={handleTogglePin}
+                  onSaveContent={handleSavePageContent}
+                />
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -553,6 +643,13 @@ export function App() {
         onNavigatePage={handleSelectPage}
         tab={inspectorTab}
         onTabChange={setInspectorTab}
+        activePageId={activePageId}
+        onGrantsUpdated={async () => {
+          if (activePageId) {
+            const gList = await api.getPageGrants(activePageId).catch(() => []);
+            setGrants(gList);
+          }
+        }}
       />
 
       {/* 4. Global Command Search Modal (⌘K) */}
@@ -612,6 +709,20 @@ export function App() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* 6. Book Data Grants Modal Dialog */}
+      {managingGrantsBook && (
+        <BookGrantsModal
+          book={managingGrantsBook}
+          onClose={() => setManagingGrantsBook(null)}
+          onUpdated={async () => {
+            if (activePageId) {
+              const gList = await api.getPageGrants(activePageId).catch(() => []);
+              setGrants(gList);
+            }
+          }}
+        />
       )}
     </div>
   );
