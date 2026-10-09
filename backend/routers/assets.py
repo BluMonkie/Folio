@@ -72,8 +72,11 @@ async def upload_asset(
                 detail="Uploaded file is empty."
             )
 
-        # Generate unique, collision-free filename
-        unique_name = f"{uuid.uuid4().hex[:16]}{ext}"
+        # Generate unique, collision-free filename with active existence check
+        while True:
+            unique_name = f"{uuid.uuid4().hex}{ext}"
+            if not storage.asset_exists(unique_name):
+                break
 
         # Persist through StorageBackend abstraction (supports FileSystemStorage and S3Storage)
         asset_url = storage.write_asset(unique_name, contents, content_type)

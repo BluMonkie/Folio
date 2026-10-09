@@ -236,6 +236,7 @@ export interface BookImportResponse {
   pages_imported: number;
   tags_restored: number;
   grants_restored: number;
+  assets_restored?: number;
   grants_requested: boolean;
   skipped_grants: string[];
   message: string;

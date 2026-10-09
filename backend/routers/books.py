@@ -5,6 +5,8 @@ import logging
 import secrets
 import shutil
 import zipfile
+import uuid
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
@@ -73,6 +75,7 @@ class BookImportResponse(BaseModel):
     pages_imported: int
     tags_restored: int
     grants_restored: int
+    assets_restored: int = 0
     grants_requested: bool
     skipped_grants: List[str] = []
     message: str
@@ -658,7 +661,25 @@ def export_book_zip(book_id: int, current_user: CurrentUser = Depends(get_curren
                 "grants": page_grants,
             })
 
-    # 5. Build ZIP archive in-memory
+    # 5. Discover referenced image assets across all page markdown contents
+    import re
+    referenced_asset_names = set()
+    for md_text in page_markdown_files.values():
+        for match in re.findall(r'(?:/api)?/assets/([a-zA-Z0-9_\-\.]+)', md_text):
+            clean_name = Path(match).name
+            if clean_name:
+                referenced_asset_names.add(clean_name)
+
+    bundled_assets = []
+    asset_data_map = {}
+    for asset_name in sorted(referenced_asset_names):
+        asset_res = storage.read_asset(asset_name)
+        if asset_res:
+            asset_bytes, _ = asset_res
+            bundled_assets.append(asset_name)
+            asset_data_map[f"assets/{asset_name}"] = asset_bytes
+
+    # 6. Build ZIP archive in-memory
     manifest = {
         "folio_version": "1.0",
         "exported_at": datetime.utcnow().isoformat() + "Z",
@@ -669,6 +690,7 @@ def export_book_zip(book_id: int, current_user: CurrentUser = Depends(get_curren
         },
         "book_grants": book_grants,
         "pages": metadata_pages,
+        "assets": bundled_assets,
         "collaborators": collaborators,
     }
 
@@ -679,6 +701,9 @@ def export_book_zip(book_id: int, current_user: CurrentUser = Depends(get_curren
         # Write individual markdown files in pages/
         for rel_path, md_text in page_markdown_files.items():
             zf.writestr(rel_path, md_text.encode("utf-8"))
+        # Write bundled image assets in assets/
+        for asset_rel_path, asset_bytes in asset_data_map.items():
+            zf.writestr(asset_rel_path, asset_bytes)
 
     zip_buffer.seek(0)
     filename = f"{book_row['slug']}.zip"
@@ -791,6 +816,46 @@ async def import_book_zip(
             except Exception:
                 cursor.execute(f"GRANT 'role_book_{new_book_id}' TO '{settings.RUNNER_DB_USER}'@'localhost';")
 
+        # 6.5. Restore any bundled image assets into active storage backend with collision protection
+        assets_restored = 0
+        asset_rename_map = {}  # orig_name -> final_name
+        import mimetypes
+        for entry in archive.infolist():
+            if entry.is_dir():
+                continue
+            norm_name = entry.filename.replace("\\", "/")
+            if "assets/" in norm_name:
+                orig_asset_name = Path(norm_name).name
+                if not orig_asset_name:
+                    continue
+                asset_bytes = archive.read(entry)
+                ctype, _ = mimetypes.guess_type(orig_asset_name)
+                content_type = ctype or "application/octet-stream"
+
+                final_asset_name = orig_asset_name
+                # Check for existing asset to prevent overwriting different files
+                if storage.asset_exists(orig_asset_name):
+                    existing = storage.read_asset(orig_asset_name)
+                    if existing and existing[0] == asset_bytes:
+                        # Identical file already exists in storage; keep existing name
+                        final_asset_name = orig_asset_name
+                    else:
+                        # Existing asset has different content! Generate brand new unique filename to prevent collision
+                        ext = Path(orig_asset_name).suffix.lower()
+                        while True:
+                            candidate_name = f"{uuid.uuid4().hex}{ext}"
+                            if not storage.asset_exists(candidate_name):
+                                break
+                        final_asset_name = candidate_name
+                        storage.write_asset(final_asset_name, asset_bytes, content_type)
+                        assets_restored += 1
+                else:
+                    # New asset name; persist directly
+                    storage.write_asset(final_asset_name, asset_bytes, content_type)
+                    assets_restored += 1
+
+                asset_rename_map[orig_asset_name] = final_asset_name
+
         # 7. Pass 1: Insert all Pages & extract content from ZIP
         manifest_pages = manifest.get("pages", [])
         slug_to_new_page_id = {}
@@ -853,6 +918,25 @@ async def import_book_zip(
             # If not in file, fallback to embedded content if present
             if not md_content and "content" in p:
                 md_content = p["content"]
+
+            # Rewrite markdown image links for any renamed or normalized assets
+            if md_content and asset_rename_map:
+                for orig_name, final_name in asset_rename_map.items():
+                    # Normalize /assets/<orig_name>, /api/assets/<orig_name>, assets/<orig_name>, ./assets/<orig_name>
+                    pattern = re.compile(rf'(?:\./|/api/|/)?assets/{re.escape(orig_name)}')
+                    md_content = pattern.sub(f"/assets/{final_name}", md_content)
+                    if orig_name != final_name:
+                        # Also replace direct filename links like (orig_name) or src="orig_name"
+                        md_content = re.sub(
+                            rf'\({re.escape(orig_name)}\)',
+                            f"(/assets/{final_name})",
+                            md_content
+                        )
+                        md_content = re.sub(
+                            rf'src=["\']{re.escape(orig_name)}["\']',
+                            f'src="/assets/{final_name}"',
+                            md_content
+                        )
 
             storage.write_page_content(new_slug, p_slug, md_content)
 
@@ -975,7 +1059,8 @@ async def import_book_zip(
         "pages_imported": len(created_records),
         "tags_restored": total_tags_restored,
         "grants_restored": restored_grants_count,
+        "assets_restored": assets_restored,
         "grants_requested": restore_grants,
         "skipped_grants": skipped_grants,
-        "message": f"Successfully imported '{raw_title}' with {len(created_records)} pages."
+        "message": f"Successfully imported '{raw_title}' with {len(created_records)} pages and {assets_restored} image assets."
     }
