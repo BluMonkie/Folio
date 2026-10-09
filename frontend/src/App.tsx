@@ -625,6 +625,12 @@ export function App() {
                   isPinned={Boolean(activePageId && pinnedPages.some((p) => p.page_id === activePageId))}
                   onTogglePin={handleTogglePin}
                   onSaveContent={handleSavePageContent}
+                  tags={tags}
+                  onOpenTags={() => {
+                    if (activePageId) {
+                      handleOpenInspectorTab(activePageId, "tags");
+                    }
+                  }}
                 />
               )}
             </div>
@@ -648,6 +654,26 @@ export function App() {
           if (activePageId) {
             const gList = await api.getPageGrants(activePageId).catch(() => []);
             setGrants(gList);
+          }
+        }}
+        onTagsUpdated={async () => {
+          if (activePageId) {
+            const tList = await api.getPageTags(activePageId).catch(() => []);
+            setTags(tList);
+          }
+        }}
+        onHistoryRestored={async (restoredPageId: number) => {
+          try {
+            const [render, hList, bList] = await Promise.all([
+              api.getPageRender(restoredPageId),
+              api.getPageHistory(restoredPageId).catch(() => []),
+              api.getPageBacklinks(restoredPageId).catch(() => []),
+            ]);
+            setPageData(render);
+            setHistory(hList);
+            setBacklinks(bList);
+          } catch (err) {
+            console.error("Failed to refresh restored page:", err);
           }
         }}
       />

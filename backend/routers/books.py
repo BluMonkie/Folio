@@ -7,6 +7,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 from backend.config import settings
 from backend.database import get_db
+from backend.services import storage
 from backend.services.auth import get_current_user, CurrentUser
 from backend.utils import slugify
 
@@ -141,8 +142,6 @@ def create_book(payload: BookCreate, current_user: CurrentUser = Depends(get_cur
     if not slug:
         raise HTTPException(status_code=400, detail="Could not generate valid slug from title.")
 
-    book_dir = settings.FOLIO_STORAGE_ROOT / slug
-
     with get_db() as cursor:
         cursor.execute("SELECT book_id FROM Book WHERE slug = %s;", (slug,))
         if cursor.fetchone():
@@ -151,7 +150,7 @@ def create_book(payload: BookCreate, current_user: CurrentUser = Depends(get_cur
                 detail=f"Book with slug '{slug}' already exists."
             )
 
-        book_dir.mkdir(parents=True, exist_ok=True)
+        storage.ensure_book_dir(slug)
 
         insert_query = """
             INSERT INTO Book (owner_id, title, slug) 
@@ -292,12 +291,7 @@ def update_book(book_id: int, payload: BookUpdate, current_user: CurrentUser = D
                 counter += 1
                 new_slug = f"{base_slug}-{counter}"
                 
-            old_dir = settings.FOLIO_STORAGE_ROOT / old_slug
-            new_dir = settings.FOLIO_STORAGE_ROOT / new_slug
-            if old_dir.exists():
-                old_dir.rename(new_dir)
-            else:
-                new_dir.mkdir(parents=True, exist_ok=True)
+            storage.rename_book_dir(old_slug, new_slug)
                 
         cursor.execute("UPDATE Book SET title = %s, slug = %s WHERE book_id = %s;", (new_title, new_slug, book_id))
         
@@ -330,9 +324,7 @@ def delete_book(book_id: int, current_user: CurrentUser = Depends(get_current_us
         cursor.execute("DELETE FROM Book WHERE book_id = %s;", (book_id,))
         cursor.execute(f"DROP ROLE IF EXISTS 'role_book_{book_id}';")
 
-    book_dir = settings.FOLIO_STORAGE_ROOT / slug
-    if book_dir.exists() and book_dir.is_dir():
-        shutil.rmtree(book_dir, ignore_errors=True)
+    storage.delete_book_dir(slug)
 
     return {"message": f"Book '{slug}' (ID {book_id}) deleted successfully."}
 

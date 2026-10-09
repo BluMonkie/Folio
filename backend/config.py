@@ -15,7 +15,16 @@ class Settings:
     DB_NAME: str = os.getenv("DB_NAME", "folio_db")
 
     # Storage settings
+    FOLIO_STORAGE_BACKEND: str = os.getenv("FOLIO_STORAGE_BACKEND", "filesystem").strip().lower()
     FOLIO_STORAGE_ROOT: Path = BASE_DIR / os.getenv("FOLIO_STORAGE_ROOT", "storage")
+
+    # S3 / Object Storage settings (AWS S3, MinIO, Cloudflare R2, LocalStack)
+    FOLIO_S3_BUCKET: str = os.getenv("FOLIO_S3_BUCKET", "folio-storage")
+    FOLIO_S3_ENDPOINT_URL: str | None = os.getenv("FOLIO_S3_ENDPOINT_URL") or None
+    FOLIO_S3_REGION_NAME: str = os.getenv("FOLIO_S3_REGION_NAME", "us-east-1")
+    FOLIO_S3_ACCESS_KEY_ID: str | None = os.getenv("FOLIO_S3_ACCESS_KEY_ID") or None
+    FOLIO_S3_SECRET_ACCESS_KEY: str | None = os.getenv("FOLIO_S3_SECRET_ACCESS_KEY") or None
+    FOLIO_S3_PREFIX: str = os.getenv("FOLIO_S3_PREFIX", "").strip().strip("/")
 
     # Authentication / Security settings
     JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "folio-insecure-secret-key-change-in-production-123456")

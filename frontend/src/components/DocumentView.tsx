@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { Book, PageRenderData, PageTreeNode } from "../api";
+import type { Book, PageRenderData, PageTreeNode, TagItem } from "../api";
 import { VisualEditor } from "./VisualEditor";
 import { SplitEditor } from "./SplitEditor";
 
@@ -16,6 +16,8 @@ interface DocumentViewProps {
   isPinned?: boolean;
   onTogglePin?: (pageId: number) => void;
   onSaveContent?: (pageId: number, content: string) => Promise<void>;
+  tags?: TagItem[];
+  onOpenTags?: () => void;
 }
 
 export const DocumentView: React.FC<DocumentViewProps> = ({
@@ -31,6 +33,8 @@ export const DocumentView: React.FC<DocumentViewProps> = ({
   isPinned = false,
   onTogglePin,
   onSaveContent,
+  tags = [],
+  onOpenTags,
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -419,6 +423,51 @@ export const DocumentView: React.FC<DocumentViewProps> = ({
               <span className="material-symbols-outlined text-[16px]">timer</span>
               ~3 min read
             </span>
+
+            {/* Note Tags Pills */}
+            {tags.length > 0 ? (
+              <>
+                <span>•</span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {tags.map((t) => (
+                    <button
+                      key={t.tag_id}
+                      type="button"
+                      onClick={onOpenTags}
+                      className="folio-pill-badge bg-[#fcf2eb] hover:bg-[#f6ece6] text-[#006a61] border border-[#e7e5e4] !h-5.5 !px-2 text-xs font-medium cursor-pointer transition-colors"
+                      title="Manage note tags in Inspector"
+                    >
+                      #{t.name}
+                    </button>
+                  ))}
+                  {onOpenTags && (
+                    <button
+                      type="button"
+                      onClick={onOpenTags}
+                      className="text-xs text-[#8d4b00] hover:underline cursor-pointer font-medium px-1"
+                      title="Add or edit tags"
+                    >
+                      +
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : (
+              onOpenTags && (
+                <>
+                  <span>•</span>
+                  <button
+                    type="button"
+                    onClick={onOpenTags}
+                    className="inline-flex items-center gap-1 text-xs text-[#78716c] hover:text-[#8d4b00] cursor-pointer transition-colors"
+                    title="Add tags to this note"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">label</span>
+                    <span>Add tags</span>
+                  </button>
+                </>
+              )
+            )}
           </div>
 
           {/* Rendered HTML Content (includes live SQL query results and styled tables) */}

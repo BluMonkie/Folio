@@ -1,4 +1,4 @@
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
 // Token management
 export function getToken(): string | null {
@@ -288,12 +288,35 @@ export const api = {
     return request<EditHistoryItem[]>(`/pages/${pageId}/history`);
   },
 
+  async restorePageVersion(pageId: number, editId: number): Promise<PageRenderData> {
+    return request<PageRenderData>(`/pages/${pageId}/restore/${editId}`, {
+      method: "POST",
+    });
+  },
+
   async getPageGrants(pageId: number): Promise<PageGrantItem[]> {
     return request<PageGrantItem[]>(`/pages/${pageId}/grants`);
   },
 
   async getPageTags(pageId: number): Promise<TagItem[]> {
     return request<TagItem[]>(`/pages/${pageId}/tags`);
+  },
+
+  async addPageTag(pageId: number, name: string): Promise<TagItem> {
+    return request<TagItem>(`/pages/${pageId}/tags`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+  },
+
+  async removePageTag(pageId: number, tagId: number): Promise<{ message: string }> {
+    return request<{ message: string }>(`/pages/${pageId}/tags/${tagId}`, {
+      method: "DELETE",
+    });
+  },
+
+  async listAllTags(): Promise<TagItem[]> {
+    return request<TagItem[]>("/tags");
   },
 
   // Search

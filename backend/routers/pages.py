@@ -423,6 +423,58 @@ def get_page_history(page_id: int, current_user: CurrentUser = Depends(get_curre
 
     return history
 
+@router.post("/pages/{page_id}/restore/{edit_id}", response_model=PageResponse)
+def restore_page_version(page_id: int, edit_id: int, current_user: CurrentUser = Depends(get_current_user)):
+    """
+    Restores the page content to the specified historical snapshot from Edits.
+    Writes the snapshot to the .md file, creates a new EDIT snapshot row in EditHistory & Edits,
+    and resynchronizes backlinks.
+    """
+    with get_db() as cursor:
+        cursor.execute("SELECT book_id, slug FROM Page WHERE page_id = %s;", (page_id,))
+        page = cursor.fetchone()
+        if not page:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Page with ID {page_id} not found.")
+
+        require_book_role(cursor, page["book_id"], current_user.user_id, allowed_roles=("OWNER", "ADMIN", "EDITOR"))
+
+        cursor.execute("SELECT slug FROM Book WHERE book_id = %s;", (page["book_id"],))
+        book = cursor.fetchone()
+        if not book:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Book not found.")
+
+        cursor.execute(
+            """
+            SELECT e.snapshot 
+            FROM EditHistory h
+            JOIN Edits e ON h.edit_id = e.edit_id
+            WHERE h.edit_id = %s AND h.page_id = %s;
+            """,
+            (edit_id, page_id)
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Revision snapshot not found for this page.")
+
+        snapshot_content = row["snapshot"]
+        book_slug = book["slug"]
+        page_slug = page["slug"]
+
+        storage.write_page_content(book_slug, page_slug, snapshot_content)
+
+        # Record new history entry
+        cursor.execute(
+            "INSERT INTO EditHistory (user_id, page_id, action) VALUES (%s, %s, 'EDIT');",
+            (current_user.user_id, page_id)
+        )
+        new_edit_id = cursor.lastrowid
+        cursor.execute("INSERT INTO Edits (edit_id, snapshot) VALUES (%s, %s);", (new_edit_id, snapshot_content))
+
+        # Resync backlinks
+        markdown.sync_page_backlinks(cursor, page_id, page["book_id"], snapshot_content)
+
+    return get_page(page_id, current_user)
+
 @router.post("/pages/{page_id}/move", response_model=PageResponse)
 def move_page(page_id: int, payload: PageMove, current_user: CurrentUser = Depends(get_current_user)):
     """

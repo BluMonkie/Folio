@@ -10,3 +10,4 @@ pyjwt>=2.8.0
 email-validator>=2.0.0
 python-multipart>=0.0.9
 sqlglot>=23.0.0
+boto3>=1.34.0
