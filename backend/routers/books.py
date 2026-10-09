@@ -161,7 +161,13 @@ def create_book(payload: BookCreate, current_user: CurrentUser = Depends(get_cur
 
         # Provision sandboxed MySQL role for this book
         cursor.execute(f"CREATE ROLE IF NOT EXISTS 'role_book_{book_id}';")
-        cursor.execute(f"GRANT 'role_book_{book_id}' TO '{settings.RUNNER_DB_USER}'@'localhost';")
+        try:
+            cursor.execute(f"GRANT 'role_book_{book_id}' TO '{settings.RUNNER_DB_USER}';")
+        except Exception:
+            try:
+                cursor.execute(f"GRANT 'role_book_{book_id}' TO '{settings.RUNNER_DB_USER}'@'%';")
+            except Exception:
+                cursor.execute(f"GRANT 'role_book_{book_id}' TO '{settings.RUNNER_DB_USER}'@'localhost';")
 
         cursor.execute("""
             SELECT 

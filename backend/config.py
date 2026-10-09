@@ -8,11 +8,18 @@ load_dotenv(BASE_DIR / ".env")
 
 class Settings:
     # Database settings
-    DB_HOST: str = os.getenv("DB_HOST", "localhost")
-    DB_PORT: int = int(os.getenv("DB_PORT", "3306"))
-    DB_USER: str = os.getenv("DB_USER", "root")
-    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "")
-    DB_NAME: str = os.getenv("DB_NAME", "folio_db")
+    DB_HOST: str = os.getenv("DB_HOST", "localhost").strip()
+    DB_PORT: int = int(os.getenv("DB_PORT", "3306").strip())
+    DB_USER: str = os.getenv("DB_USER", "root").strip()
+    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "").strip()
+    DB_NAME: str = os.getenv("DB_NAME", "folio_db").strip()
+    DB_SSL: bool = (
+        os.getenv("DB_SSL", "auto").strip().lower() in ("true", "1", "yes")
+        or (
+            os.getenv("DB_SSL", "auto").strip().lower() == "auto"
+            and os.getenv("DB_HOST", "localhost").strip() not in ("localhost", "127.0.0.1")
+        )
+    )
 
     # Storage settings
     FOLIO_STORAGE_BACKEND: str = os.getenv("FOLIO_STORAGE_BACKEND", "filesystem").strip().lower()
@@ -32,7 +39,7 @@ class Settings:
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
     # Sandboxed Query Runner DB Settings (MySQL 8.0 Role Executor)
-    RUNNER_DB_USER: str = os.getenv("RUNNER_DB_USER", "folio_runner")
-    RUNNER_DB_PASSWORD: str = os.getenv("RUNNER_DB_PASSWORD", "folio_runner_pass")
+    RUNNER_DB_USER: str = os.getenv("RUNNER_DB_USER", "folio_runner").strip()
+    RUNNER_DB_PASSWORD: str = os.getenv("RUNNER_DB_PASSWORD", "folio_runner_pass").strip()
 
 settings = Settings()

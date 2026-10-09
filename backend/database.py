@@ -5,15 +5,19 @@ from backend.config import settings
 
 def create_connection():
     """Creates a new PyMySQL connection using settings."""
-    return pymysql.connect(
-        host=settings.DB_HOST,
-        port=settings.DB_PORT,
-        user=settings.DB_USER,
-        password=settings.DB_PASSWORD,
-        database=settings.DB_NAME,
-        cursorclass=DictCursor,
-        autocommit=False
-    )
+    kwargs = {
+        "host": settings.DB_HOST,
+        "port": settings.DB_PORT,
+        "user": settings.DB_USER,
+        "password": settings.DB_PASSWORD,
+        "database": settings.DB_NAME,
+        "cursorclass": DictCursor,
+        "autocommit": False,
+        "connect_timeout": 10,
+    }
+    if settings.DB_SSL:
+        kwargs["ssl"] = {"ssl": True}
+    return pymysql.connect(**kwargs)
 
 @contextmanager
 def get_db():
@@ -41,14 +45,18 @@ def get_runner_db(book_id: int):
     role_book_{book_id}, switches to database, sets execution timeout (3s),
     and opens a read-only transaction.
     """
-    conn = pymysql.connect(
-        host=settings.DB_HOST,
-        port=settings.DB_PORT,
-        user=settings.RUNNER_DB_USER,
-        password=settings.RUNNER_DB_PASSWORD,
-        cursorclass=DictCursor,
-        autocommit=False
-    )
+    runner_kwargs = {
+        "host": settings.DB_HOST,
+        "port": settings.DB_PORT,
+        "user": settings.RUNNER_DB_USER,
+        "password": settings.RUNNER_DB_PASSWORD,
+        "cursorclass": DictCursor,
+        "autocommit": False,
+        "connect_timeout": 10,
+    }
+    if settings.DB_SSL:
+        runner_kwargs["ssl"] = {"ssl": True}
+    conn = pymysql.connect(**runner_kwargs)
     try:
         with conn.cursor() as cursor:
             role_name = f"role_book_{int(book_id)}"

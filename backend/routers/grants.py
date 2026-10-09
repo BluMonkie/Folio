@@ -124,7 +124,13 @@ def grant_table_to_book(book_id: int, payload: GrantCreate, current_user: Curren
         # Synchronize MySQL 8.0 role for this book if read is granted
         if payload.can_read:
             cursor.execute(f"CREATE ROLE IF NOT EXISTS 'role_book_{book_id}';")
-            cursor.execute(f"GRANT 'role_book_{book_id}' TO '{settings.RUNNER_DB_USER}'@'localhost';")
+            try:
+                cursor.execute(f"GRANT 'role_book_{book_id}' TO '{settings.RUNNER_DB_USER}';")
+            except Exception:
+                try:
+                    cursor.execute(f"GRANT 'role_book_{book_id}' TO '{settings.RUNNER_DB_USER}'@'%';")
+                except Exception:
+                    cursor.execute(f"GRANT 'role_book_{book_id}' TO '{settings.RUNNER_DB_USER}'@'localhost';")
             cursor.execute(f"GRANT SELECT ON `{db_name}`.`{table_name}` TO 'role_book_{book_id}';")
 
         return {
