@@ -73,6 +73,19 @@ export const SplitEditor: React.FC<SplitEditorProps> = ({
           </div>`;
         }
       );
+
+      // Wrap markdown tables in identical folio-query-box styling
+      parsed = parsed.replace(
+        /<table(?:\s+[^>]*)?>([\s\S]*?)<\/table>/gi,
+        (_match, tableInner) => {
+          return `<div class="folio-query-box folio-markdown-table-box">
+            <div class="folio-table-wrapper">
+              <table class="folio-data-table">${tableInner}</table>
+            </div>
+          </div>`;
+        }
+      );
+
       return parsed;
     } catch (err) {
       return `<pre class="text-red-600">Markdown Parse Error: ${err}</pre>`;
@@ -126,6 +139,11 @@ export const SplitEditor: React.FC<SplitEditorProps> = ({
 
   const insertWikilink = () => {
     insertText(` [[Note Title]]`);
+  };
+
+  const insertTableBlock = () => {
+    const tableTemplate = `\n\n| Column 1 | Column 2 | Column 3 |\n| :--- | :--- | :--- |\n| Row 1 Data | Value A | 100 |\n| Row 2 Data | Value B | 200 |\n\n`;
+    insertText(tableTemplate);
   };
 
   const insertImage = (url: string, altText: string) => {
@@ -226,6 +244,16 @@ export const SplitEditor: React.FC<SplitEditorProps> = ({
             title="Insert SQL Query Block"
           >
             + SQL Query
+          </button>
+
+          <button
+            type="button"
+            onClick={insertTableBlock}
+            className="px-2.5 py-1 rounded-lg bg-[#f0f9ff] hover:bg-[#e0f2fe] border border-[#0284c7]/30 text-[#0284c7] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+            title="Insert Markdown Table"
+          >
+            <span className="material-symbols-outlined text-[15px]">table_chart</span>
+            <span>+ Table</span>
           </button>
 
           <button

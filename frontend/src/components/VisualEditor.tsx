@@ -3,6 +3,7 @@ import { useEditor, EditorContent, ReactNodeViewRenderer, NodeViewWrapper, NodeV
 import StarterKit from "@tiptap/starter-kit";
 import CodeBlock from "@tiptap/extension-code-block";
 import Image from "@tiptap/extension-image";
+import { Table, TableRow, TableHeader, TableCell } from "@tiptap/extension-table";
 import { Markdown } from "tiptap-markdown";
 import { api, resolveAssetUrl } from "../api";
 import { InsertImageModal } from "./InsertImageModal";
@@ -104,6 +105,15 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
           class: "folio-editor-image rounded-xl my-4 max-w-full shadow-xs border border-[#e7e5e4]",
         },
       }),
+      Table.configure({
+        resizable: true,
+        HTMLAttributes: {
+          class: "folio-data-table",
+        },
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
       Markdown.configure({
         html: true,
         transformPastedText: true,
@@ -232,6 +242,10 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
     );
     const target = selection || "Note Title";
     editor.chain().focus().insertContent(`[[${target}]]`).run();
+  };
+
+  const insertTable = () => {
+    editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
   };
 
   return (
@@ -425,6 +439,67 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
         >
           + SQL Query
         </button>
+
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={insertTable}
+          className="px-2.5 py-1 rounded-lg bg-[#f0f9ff] hover:bg-[#e0f2fe] border border-[#0284c7]/30 text-[#0284c7] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+          title="Insert Markdown Table"
+        >
+          <span className="material-symbols-outlined text-[15px]">table_chart</span>
+          <span>+ Table</span>
+        </button>
+
+        {editor.isActive("table") && (
+          <div className="flex items-center gap-1 bg-[#e0f2fe]/60 px-1.5 py-0.5 rounded-lg border border-[#0284c7]/30 text-xs">
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => editor.chain().focus().addColumnAfter().run()}
+              className="px-1.5 py-0.5 rounded bg-white hover:bg-[#bae6fd] text-[#0369a1] font-medium border border-[#0284c7]/20"
+              title="Add Column After"
+            >
+              +Col
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => editor.chain().focus().addRowAfter().run()}
+              className="px-1.5 py-0.5 rounded bg-white hover:bg-[#bae6fd] text-[#0369a1] font-medium border border-[#0284c7]/20"
+              title="Add Row After"
+            >
+              +Row
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => editor.chain().focus().deleteColumn().run()}
+              className="px-1.5 py-0.5 rounded bg-white hover:bg-[#fed7aa] text-[#c2410c] font-medium border border-[#ea580c]/20"
+              title="Delete Column"
+            >
+              -Col
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => editor.chain().focus().deleteRow().run()}
+              className="px-1.5 py-0.5 rounded bg-white hover:bg-[#fed7aa] text-[#c2410c] font-medium border border-[#ea580c]/20"
+              title="Delete Row"
+            >
+              -Row
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => editor.chain().focus().deleteTable().run()}
+              className="px-1.5 py-0.5 rounded bg-white hover:bg-[#fecaca] text-[#dc2626] font-medium border border-[#ef4444]/20"
+              title="Delete Table"
+            >
+              Del
+            </button>
+          </div>
+        )}
 
         <button
           type="button"

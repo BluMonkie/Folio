@@ -157,13 +157,34 @@ def format_rendered_code_blocks(html_text: str) -> str:
         )
     return CODE_BLOCK_HTML_REGEX.sub(replacer, html_text)
 
+markdown_parser = mistune.create_markdown(plugins=["table", "strikethrough", "task_lists"])
+
+TABLE_HTML_REGEX = re.compile(r'<table(?:\s+[^>]*)?>([\s\S]*?)</table>', re.IGNORECASE)
+
+def format_rendered_tables(html_text: str) -> str:
+    """
+    Wraps rendered markdown <table> elements in .folio-query-box and .folio-table-wrapper
+    with .folio-data-table so markdown tables look identical to SQL query tables.
+    """
+    def replacer(m):
+        table_body = m.group(1)
+        return (
+            f'<div class="folio-query-box folio-markdown-table-box">'
+            f'  <div class="folio-table-wrapper">'
+            f'    <table class="folio-data-table">{table_body}</table>'
+            f'  </div>'
+            f'</div>'
+        )
+    return TABLE_HTML_REGEX.sub(replacer, html_text)
+
 def render_page_content(page_id: int, book_id: int, book_slug: str, raw_markdown: str) -> str:
     """
     Processes raw page markdown into full HTML:
     1. Extracts and executes :::query ... ::: blocks into rendered HTML tables/errors.
     2. Resolves [[wikilinks]] against pages in the same book.
-    3. Transforms standard markdown to HTML using Mistune.
-    4. Injects rendered query blocks into their placeholders.
+    3. Transforms standard markdown to HTML using Mistune with table plugin.
+    4. Formats code blocks and tables into styled cards identical to SQL query boxes.
+    5. Injects rendered query blocks into their placeholders.
     """
     if not raw_markdown:
         return ""
@@ -186,9 +207,10 @@ def render_page_content(page_id: int, book_id: int, book_slug: str, raw_markdown
     # 2. Resolve wikilinks
     processed_md = render_wikilinks(book_id, book_slug, processed_md)
 
-    # 3. Convert markdown to HTML
-    rendered_html = mistune.html(processed_md)
+    # 3. Convert markdown to HTML with tables enabled
+    rendered_html = markdown_parser(processed_md)
     rendered_html = format_rendered_code_blocks(rendered_html)
+    rendered_html = format_rendered_tables(rendered_html)
 
     # 4. Substitute query placeholders with executed query HTML
     for token, block_html in query_placeholders.items():

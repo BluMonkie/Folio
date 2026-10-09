@@ -445,3 +445,95 @@
   font-style: italic;
 }
 
+/* TipTap ProseMirror & Prose Markdown Tables (Matching SQL Query Tables) */
+.ProseMirror .tableWrapper,
+.prose .tableWrapper,
+.prose .folio-markdown-table-box {
+  background: #ffffff !important;
+  border: 1px solid #e7e5e4 !important;
+  border-radius: 12px !important;
+  margin: 1.5rem 0 !important;
+  overflow-x: auto !important;
+  box-shadow: 0 1px 3px rgba(28, 25, 23, 0.04), 0 4px 12px rgba(28, 25, 23, 0.03) !important;
+}
+
+.ProseMirror table,
+.prose table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  font-size: 0.85rem !important;
+  text-align: left !important;
+  margin: 0 !important;
+  background: #ffffff !important;
+}
+
+.ProseMirror table th,
+.prose table th {
+  background: #fbf6f2 !important;
+  color: #554336 !important;
+  padding: 0.65rem 1rem !important;
+  font-weight: 600 !important;
+  font-family: 'Plus Jakarta Sans', sans-serif !important;
+  border-top: none !important;
+  border-bottom: 1px solid #e7e5e4 !important;
+  border-left: none !important;
+  border-right: 1px solid #e7e5e4 !important;
+  white-space: nowrap !important;
+  position: relative !important;
+}
+
+.ProseMirror table td,
+.prose table td {
+  padding: 0.65rem 1rem !important;
+  border-top: none !important;
+  border-bottom: 1px solid #f0e6e0 !important;
+  border-left: none !important;
+  border-right: 1px solid #f0e6e0 !important;
+  color: #1f1b17 !important;
+  vertical-align: top !important;
+  position: relative !important;
+}
+
+.ProseMirror table th:last-child,
+.ProseMirror table td:last-child,
+.prose table th:last-child,
+.prose table td:last-child {
+  border-right: none !important;
+}
+
+.ProseMirror table tr:last-child td,
+.prose table tr:last-child td {
+  border-bottom: none !important;
+}
+
+.ProseMirror table tr:hover td,
+.prose table tr:hover td {
+  background: #fdf9f6 !important;
+}
+
+/* TipTap table cell selection & resize handle */
+.ProseMirror .selectedCell:after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(217, 119, 6, 0.12);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.ProseMirror .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: -2px;
+  width: 4px;
+  background-color: #d97706;
+  pointer-events: none;
+}
+
+.ProseMirror table p,
+.prose table p {
+  margin: 0 !important;
+  line-height: 1.4 !important;
+}
+
