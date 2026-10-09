@@ -36,28 +36,99 @@ export const SplitEditor: React.FC<SplitEditorProps> = ({
       return "<p class='text-[#78716c] italic'>Start typing markdown on the left...</p>";
     }
 
-    // Preprocess :::query ... ::: and ```query ... ``` blocks into live visual preview cards
+    // Safely preprocess :::query and ```query blocks into live visual preview cards,
+    // protecting code blocks (`...` and ```...```) and handling backslash escapes (\:::query)
+    const QUERY_SCANNER = /(^[ \t]*(?:`{3,}|~{3,})[ \t]*([^\r\n`]*)\r?\n[\s\S]*?\r?\n[ \t]*(?:`{3,}|~{3,})[ \t]*(?:\r?\n|$))|(`+[\s\S]*?`+)|(\\+)(:::+\s*query\b[\s\S]*?(?:\\:::+|:::+))|(\\+)(:::+\s*query\b)|(:::+\s*query\b([\s\S]*?):::+)/gim;
+
     let preprocessed = content.replace(
-      /(?:(?:::+\s*query\s*([\s\S]*?)::+)|(?:```(?:query|sql-query)\s*([\s\S]*?)```))/gi,
-      (_match, q1, q2) => {
-        const trimmedSql = (q1 || q2 || "").trim();
-        return `\n\n<div class="folio-query-box">
-          <div class="folio-query-header">
-            <span class="folio-badge folio-badge-info">SQL QUERY BLOCK</span>
-          </div>
-          <div class="folio-query-body">
-            <pre class="folio-sql-preview"><code>${trimmedSql}</code></pre>
-          </div>
-        </div>\n\n`;
+      QUERY_SCANNER,
+      (match, fenced, lang, inline, escSlashes1, escBody1, escSlashes2, escBody2, colonMatch, colonSql) => {
+        // 1. Fenced code block (preserve unless active query fence)
+        if (fenced) {
+          const cleanLang = (lang || "").trim().toLowerCase();
+          if (cleanLang === "query" || cleanLang === "sql-query") {
+            const sql = fenced
+              .replace(/^[ \t]*(?:`{3,}|~{3,})[^\r\n`]*\r?\n/, "")
+              .replace(/\r?\n[ \t]*(?:`{3,}|~{3,})[ \t]*(?:\r?\n|$)/, "");
+            return `\n\n<div class="folio-query-box">
+              <div class="folio-query-header">
+                <span class="folio-badge folio-badge-info">SQL QUERY BLOCK</span>
+              </div>
+              <div class="folio-query-body">
+                <pre class="folio-sql-preview"><code>${sql.trim()}</code></pre>
+              </div>
+            </div>\n\n`;
+          }
+          return fenced;
+        }
+
+        // 2. Inline code span: preserve completely
+        if (inline) {
+          return inline;
+        }
+
+        // 3. Escaped colon query block: e.g. \:::query ... :::
+        if (escSlashes1) {
+          if (escSlashes1.length % 2 === 1) {
+            return escSlashes1.slice(0, -1) + escBody1.replace(/\\(:::+)/g, "$1");
+          }
+          const rawSql = escBody1.replace(/^:::+\s*query\b/i, "").replace(/:::+$/, "").trim();
+          const prefix = escSlashes1.slice(0, escSlashes1.length / 2);
+          return `${prefix}\n\n<div class="folio-query-box">
+              <div class="folio-query-header">
+                <span class="folio-badge folio-badge-info">SQL QUERY BLOCK</span>
+              </div>
+              <div class="folio-query-body">
+                <pre class="folio-sql-preview"><code>${rawSql}</code></pre>
+              </div>
+            </div>\n\n`;
+        }
+
+        // 4. Escaped single \:::query
+        if (escSlashes2) {
+          if (escSlashes2.length % 2 === 1) {
+            return escSlashes2.slice(0, -1) + escBody2;
+          }
+          return escSlashes2.slice(0, escSlashes2.length / 2) + escBody2;
+        }
+
+        // 5. Active colon query block
+        if (colonMatch) {
+          const trimmedSql = (colonSql || "").trim();
+          return `\n\n<div class="folio-query-box">
+            <div class="folio-query-header">
+              <span class="folio-badge folio-badge-info">SQL QUERY BLOCK</span>
+            </div>
+            <div class="folio-query-body">
+              <pre class="folio-sql-preview"><code>${trimmedSql}</code></pre>
+            </div>
+          </div>\n\n`;
+        }
+
+        return match;
       }
     );
 
-    // Preprocess [[wikilinks]] into styled tags
+    // Safely preprocess [[wikilinks]] without altering code blocks or inline code
+    const WL_SCANNER = /(^[ \t]*(?:`{3,}|~{3,})[^\r\n`]*\r?\n[\s\S]*?\r?\n[ \t]*(?:`{3,}|~{3,})[ \t]*(?:\r?\n|$))|(`+[\s\S]*?`+)|(\\+)\[\[([^\]|\\]+)(?:\|([^\]\\]+))?\]\]|\[\[([^\]|\\]+)(?:\|([^\]\\]+))?\]\]/gim;
+
     preprocessed = preprocessed.replace(
-      /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g,
-      (_match, target, display) => {
-        const text = (display || target).trim();
-        return `<span class="folio-wikilink">${text}</span>`;
+      WL_SCANNER,
+      (match, fenced, inline, escSlashes, escTarget, escLabel, wlTarget, wlLabel) => {
+        if (fenced || inline) return match;
+        if (escSlashes) {
+          const label = (escLabel || escTarget || "").trim();
+          if (escSlashes.length % 2 === 1) {
+            return `${escSlashes.slice(0, -1)}[[${label}]]`;
+          }
+          const prefix = escSlashes.slice(0, escSlashes.length / 2);
+          return `${prefix}<span class="folio-wikilink">${label}</span>`;
+        }
+        if (wlTarget) {
+          const text = (wlLabel || wlTarget || "").trim();
+          return `<span class="folio-wikilink">${text}</span>`;
+        }
+        return match;
       }
     );
 

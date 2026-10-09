@@ -15,19 +15,65 @@ interface VisualEditorProps {
 }
 
 /**
- * Preprocesses markdown to convert legacy :::query blocks into ```query code blocks,
- * and strip out any previously mangled escapes (e.g. \* or \() inside queries.
+ * Preprocesses markdown to convert active :::query blocks into ```query code blocks,
+ * without touching inline code (`...`) or non-query fenced blocks (```...```),
+ * and honoring backslash escapes (\:::query).
  */
 function preprocessForEditor(raw: string): string {
   if (!raw) return "";
-  let res = raw.replace(
-    /:::+\s*query\s*([\s\S]*?)::+/gi,
-    (_match: string, sql: string) => {
-      const cleanSql = sql.replace(/\\([*()_`[\]])/g, (_m: string, ch: string) => ch).trim();
-      return `\n\n\`\`\`query\n${cleanSql}\n\`\`\`\n\n`;
+
+  const SCANNER_RE = /(^[ \t]*(?:`{3,}|~{3,})[ \t]*([^\r\n`]*)\r?\n[\s\S]*?\r?\n[ \t]*(?:`{3,}|~{3,})[ \t]*(?:\r?\n|$))|(`+[\s\S]*?`+)|(\\+)(:::+\s*query\b[\s\S]*?(?:\\:::+|:::+))|(\\+)(:::+\s*query\b)|(:::+\s*query\b([\s\S]*?):::+)/gim;
+
+  return raw.replace(
+    SCANNER_RE,
+    (match, fenced, lang, inline, escSlashes1, escBody1, escSlashes2, escBody2, colonMatch, colonSql) => {
+      // 1. Existing fenced code block:
+      // If it's already ```query, unescape previously mangled escapes inside cleanSql
+      if (fenced) {
+        const cleanLang = (lang || "").trim().toLowerCase();
+        if (cleanLang === "query" || cleanLang === "sql-query") {
+          const sql = fenced
+            .replace(/^[ \t]*(?:`{3,}|~{3,})[^\r\n`]*\r?\n/, "")
+            .replace(/\r?\n[ \t]*(?:`{3,}|~{3,})[ \t]*(?:\r?\n|$)/, "");
+          const cleanSql = sql.replace(/\\([*()_`[\]])/g, (_m: string, ch: string) => ch).trim();
+          return `\n\n\`\`\`query\n${cleanSql}\n\`\`\`\n\n`;
+        }
+        return fenced;
+      }
+
+      // 2. Inline code: leave completely untouched!
+      if (inline) {
+        return inline;
+      }
+
+      // 3. Escaped query block:
+      if (escSlashes1) {
+        if (escSlashes1.length % 2 === 1) {
+          return escSlashes1.slice(0, -1) + escBody1.replace(/\\(:::+)/g, "$1");
+        }
+        const rawSql = escBody1.replace(/^:::+\s*query\b/i, "").replace(/:::+$/, "").trim();
+        const cleanSql = rawSql.replace(/\\([*()_`[\]])/g, (_m: string, ch: string) => ch).trim();
+        const prefix = escSlashes1.slice(0, escSlashes1.length / 2);
+        return `${prefix}\n\n\`\`\`query\n${cleanSql}\n\`\`\`\n\n`;
+      }
+
+      // 4. Escaped single \:::query
+      if (escSlashes2) {
+        if (escSlashes2.length % 2 === 1) {
+          return escSlashes2.slice(0, -1) + escBody2;
+        }
+        return escSlashes2.slice(0, escSlashes2.length / 2) + escBody2;
+      }
+
+      // 5. Active colon query block: convert into ```query for VisualEditor's CustomCodeBlock
+      if (colonMatch) {
+        const cleanSql = (colonSql || "").replace(/\\([*()_`[\]])/g, (_m: string, ch: string) => ch).trim();
+        return `\n\n\`\`\`query\n${cleanSql}\n\`\`\`\n\n`;
+      }
+
+      return match;
     }
   );
-  return res;
 }
 
 /**
@@ -173,15 +219,10 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
     onUpdate: ({ editor }) => {
       let md = (editor.storage as any).markdown?.getMarkdown?.() ?? "";
       md = md.replace(/\\\[\\\[/g, "[[").replace(/\\\]\\\]/g, "]]");
-      // Convert ```query blocks back into :::query blocks for storage and read mode
-      md = md.replace(/```(?:query|sql-query)\s*([\s\S]*?)```/gi, (_match: string, sql: string) => {
+      // Convert ```query and ```sql-query blocks back into :::query blocks for storage and read mode
+      md = md.replace(/(?:^|\n)```(?:query|sql-query)\s*([\s\S]*?)```(?:\n|$)/gi, (_match: string, sql: string) => {
         const cleanSql = sql.replace(/\\([*()_`[\]])/g, (_m: string, ch: string) => ch);
-        return `:::query\n${cleanSql.trim()}\n:::`;
-      });
-      // Also unescape any :::query blocks if present
-      md = md.replace(/:::+\s*query\s*([\s\S]*?)::+/gi, (_match: string, sql: string) => {
-        const cleanSql = sql.replace(/\\([*()_`[\]])/g, (_m: string, ch: string) => ch);
-        return `:::query\n${cleanSql.trim()}\n:::`;
+        return `\n\n:::query\n${cleanSql.trim()}\n:::\n\n`;
       });
       lastEmittedRef.current = md;
       onChange(md);

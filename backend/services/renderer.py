@@ -6,11 +6,25 @@ import mistune
 from backend.database import get_db, get_runner_db
 from backend.services.query_validator import validate_select_query
 
-QUERY_BLOCK_REGEX = re.compile(
-    r"(?:(?:::+\s*query\s*([\s\S]*?)::+)|(?:```(?:query|sql-query)\s*([\s\S]*?)```))",
-    re.IGNORECASE
+ESCAPED_FENCE_RE = r'(?P<esc_fence>\\+)(?P<esc_fence_body>`{3,}|~{3,})[ \t]*(?P<esc_fence_lang>[^\r\n`]*)\r?\n(?P<esc_fence_code>[\s\S]*?)\r?\n[ \t]*(?P=esc_fence_body)[ \t]*(?:\r?\n|$)'
+FENCED_BLOCK_RE = r'^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*(?P<lang>[^\r\n`]*)\r?\n(?P<code>[\s\S]*?)\r?\n[ \t]*(?P=fence)[ \t]*(?:\r?\n|$)'
+INLINE_CODE_RE = r'(?P<ticks>`+)(?P<inline>[\s\S]*?)(?P=ticks)'
+ESCAPED_COLON_RE = r'(?P<esc_colon>\\+)(?P<esc_colon_body>:::+\s*query\b[\s\S]*?(?:\\:::+|:::+))'
+ESCAPED_SINGLE_RE = r'(?P<esc_single>\\+)(?P<esc_single_body>:::+\s*query\b)'
+COLON_QUERY_RE = r'(?P<colon_query>:::+\s*query\b(?P<colon_sql>[\s\S]*?):::+)'
+
+QUERY_SCANNER_REGEX = re.compile(
+    f'({ESCAPED_FENCE_RE})|({FENCED_BLOCK_RE})|({INLINE_CODE_RE})|({ESCAPED_COLON_RE})|({ESCAPED_SINGLE_RE})|({COLON_QUERY_RE})',
+    re.MULTILINE | re.IGNORECASE
 )
-WIKILINK_REGEX = re.compile(r"(?<!\\\\)(?:\\)?\[(?:\\)?\[([^\]|\\]+)(?:\|([^\]\\]+))?(?:\\)?\](?:\\)?\]")
+
+WIKILINK_SCANNER_REGEX = re.compile(
+    r'(^[ \t]*(?:`{3,}|~{3,})[^\r\n`]*\r?\n[\s\S]*?\r?\n[ \t]*(?:`{3,}|~{3,})[ \t]*(?:\r?\n|$))'
+    r'|(`+[\s\S]*?`+)'
+    r'|(?P<esc_slashes>\\+)\[\[(?P<esc_target>[^\]|\\]+)(?:\|(?P<esc_label>[^\]\\]+))?\]\]'
+    r'|\[\[(?P<wl_target>[^\]|\\]+)(?:\|(?P<wl_label>[^\]\\]+))?\]\]',
+    re.MULTILINE
+)
 
 def render_error_block(title: str, message: str) -> str:
     """Renders a styled error container for SQL validation or execution failures."""
@@ -126,18 +140,33 @@ def render_wikilinks(book_id: int, book_slug: str, text: str) -> str:
     page_map = {p["title"].strip().lower(): p for p in pages}
 
     def replace_link(match):
-        target = match.group(1).strip()
-        label = match.group(2).strip() if match.group(2) else target
+        # 1. Non-link code blocks and inline code spans are left untouched
+        if match.group(1) or match.group(2):
+            return match.group(0)
+
+        # 2. Escaped wikilinks: e.g. \[[Title]]
+        if match.group("esc_slashes"):
+            slashes = match.group("esc_slashes")
+            label = match.group("esc_label") or match.group("esc_target")
+            if len(slashes) % 2 == 1:
+                return f'{slashes[:-1]}[[{label}]]'
+            prefix = slashes[:len(slashes) // 2]
+            target = match.group("esc_target").strip()
+            label = match.group("esc_label").strip() if match.group("esc_label") else target
+        else:
+            prefix = ""
+            target = match.group("wl_target").strip()
+            label = match.group("wl_label").strip() if match.group("wl_label") else target
 
         matched_page = page_map.get(target.lower())
         if matched_page:
             slug = matched_page["slug"]
             page_id = matched_page["page_id"]
-            return f'<a href="/books/{book_slug}/pages/{slug}" class="folio-wikilink" data-page-id="{page_id}">{html.escape(label)}</a>'
+            return f'{prefix}<a href="/books/{book_slug}/pages/{slug}" class="folio-wikilink" data-page-id="{page_id}">{html.escape(label)}</a>'
         else:
-            return f'<span class="folio-wikilink broken-link" title="Page \'{html.escape(target)}\' does not exist">{html.escape(label)}</span>'
+            return f'{prefix}<span class="folio-wikilink broken-link" title="Page \'{html.escape(target)}\' does not exist">{html.escape(label)}</span>'
 
-    return WIKILINK_REGEX.sub(replace_link, text)
+    return WIKILINK_SCANNER_REGEX.sub(replace_link, text)
 
 CODE_BLOCK_HTML_REGEX = re.compile(
     r'<pre[^>]*><code(?:\s+class=[\"\']language-([^\"\'>\s]*)[\"\'])?[^>]*>([\s\S]*?)</code></pre>',
@@ -194,15 +223,76 @@ def render_page_content(page_id: int, book_id: int, book_slug: str, raw_markdown
 
     def query_replacer(match):
         nonlocal counter
-        query_sql = (match.group(1) or match.group(2) or "").strip()
-        rendered_html = execute_and_render_query(page_id, book_id, query_sql)
-        token = f"<!-- FOLIO_QUERY_BLOCK_{counter} -->"
-        query_placeholders[token] = rendered_html
-        counter += 1
-        return f"\n\n{token}\n\n"
+
+        # 1. Escaped fenced query: e.g. \```query ... ```
+        if match.group("esc_fence"):
+            slashes = match.group("esc_fence")
+            body = match.group(0)[len(slashes):]
+            if len(slashes) % 2 == 1:
+                return slashes[:-1] + body
+            lang = (match.group("esc_fence_lang") or "").strip().lower()
+            if lang in ("query", "sql-query"):
+                sql = match.group("esc_fence_code").strip()
+                rendered_html = execute_and_render_query(page_id, book_id, sql)
+                token = f"<!-- FOLIO_QUERY_BLOCK_{counter} -->"
+                query_placeholders[token] = rendered_html
+                counter += 1
+                return slashes[:len(slashes) // 2] + f"\n\n{token}\n\n"
+            return match.group(0)
+
+        # 2. Regular fenced code block: preserve unless active query/sql-query
+        if match.group("fence"):
+            lang = (match.group("lang") or "").strip().lower()
+            if lang in ("query", "sql-query"):
+                sql = match.group("code").strip()
+                rendered_html = execute_and_render_query(page_id, book_id, sql)
+                token = f"<!-- FOLIO_QUERY_BLOCK_{counter} -->"
+                query_placeholders[token] = rendered_html
+                counter += 1
+                return f"\n\n{token}\n\n"
+            return match.group(0)
+
+        # 3. Inline code span: preserve completely
+        if match.group("ticks"):
+            return match.group(0)
+
+        # 4. Escaped colon query: e.g. \:::query ... :::
+        if match.group("esc_colon"):
+            slashes = match.group("esc_colon")
+            body = match.group("esc_colon_body")
+            if len(slashes) % 2 == 1:
+                body = re.sub(r"\\(:::+)", r"\1", body)
+                return slashes[:-1] + body
+            # Even slashes -> active query!
+            clean_sql = re.sub(r"^:::+\s*query\b", "", body, flags=re.I)
+            clean_sql = re.sub(r":::+$", "", clean_sql).strip()
+            rendered_html = execute_and_render_query(page_id, book_id, clean_sql)
+            token = f"<!-- FOLIO_QUERY_BLOCK_{counter} -->"
+            query_placeholders[token] = rendered_html
+            counter += 1
+            return slashes[:len(slashes) // 2] + f"\n\n{token}\n\n"
+
+        # 5. Escaped single \:::query
+        if match.group("esc_single"):
+            slashes = match.group("esc_single")
+            body = match.group("esc_single_body")
+            if len(slashes) % 2 == 1:
+                return slashes[:-1] + body
+            return slashes[:len(slashes) // 2] + body
+
+        # 6. Active colon query block: :::query ... :::
+        if match.group("colon_query"):
+            sql = match.group("colon_sql").strip()
+            rendered_html = execute_and_render_query(page_id, book_id, sql)
+            token = f"<!-- FOLIO_QUERY_BLOCK_{counter} -->"
+            query_placeholders[token] = rendered_html
+            counter += 1
+            return f"\n\n{token}\n\n"
+
+        return match.group(0)
 
     # 1. Replace query blocks with unique comment placeholders
-    processed_md = QUERY_BLOCK_REGEX.sub(query_replacer, raw_markdown)
+    processed_md = QUERY_SCANNER_REGEX.sub(query_replacer, raw_markdown)
 
     # 2. Resolve wikilinks
     processed_md = render_wikilinks(book_id, book_slug, processed_md)
