@@ -27,6 +27,17 @@ CREATE TABLE BookCollaborators (
     FOREIGN KEY (user_id) REFERENCES User(user_id) ON DELETE CASCADE
 );
 
+-- Public Web Publishing / Shared Access
+CREATE TABLE BookPublish (
+    book_id INT PRIMARY KEY,
+    share_token VARCHAR(64) UNIQUE NOT NULL,
+    access_mode VARCHAR(20) NOT NULL DEFAULT 'VIEWER' CHECK (access_mode IN ('VIEWER', 'EDITOR')),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (book_id) REFERENCES Book(book_id) ON DELETE CASCADE
+);
+
 -- Page db
 CREATE TABLE Page (
     page_id INT AUTO_INCREMENT PRIMARY KEY,

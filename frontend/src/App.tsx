@@ -8,9 +8,10 @@ import type {
   BacklinkItem, 
   EditHistoryItem, 
   TagItem,
-  BookImportResponse
+  BookImportResponse,
+  PublicBookView as PublicBookViewType,
 } from "./api";
-import { api, getToken } from "./api";
+import { api, getToken, setShareToken } from "./api";
 import { Sidebar, type PinnedPageItem } from "./components/Sidebar";
 import { Bookshelf } from "./components/Bookshelf";
 import { DocumentView } from "./components/DocumentView";
@@ -20,6 +21,8 @@ import { AuthScreen } from "./components/AuthScreen";
 import { UserAccountMenu } from "./components/UserAccountMenu";
 import { DataStudio } from "./components/DataStudio";
 import { BookGrantsModal } from "./components/BookGrantsModal";
+import { BookPublishModal } from "./components/BookPublishModal";
+import { PublicBookView } from "./components/PublicBookView";
 
 interface RecentPageItem {
   page_id: number;
@@ -61,6 +64,21 @@ export function App() {
   const [loadingPage, setLoadingPage] = useState(false);
   const [isCreateBookOpen, setIsCreateBookOpen] = useState(false);
   const [newBookTitle, setNewBookTitle] = useState("");
+
+  // Public Publishing & Shared Link State
+  const [publishingBook, setPublishingBook] = useState<Book | null>(null);
+  const [sharedToken, setSharedTokenState] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const params = new URLSearchParams(window.location.search);
+    const fromQuery = params.get("share");
+    if (fromQuery) return fromQuery;
+    const match = window.location.pathname.match(/^\/(?:share|p)\/([a-zA-Z0-9_-]+)/);
+    if (match && match[1]) return match[1];
+    return null;
+  });
+  const [isSharedEditing, setIsSharedEditing] = useState(false);
+  const [requireLoginForShare, setRequireLoginForShare] = useState(false);
+  const [publicSharedBookData, setPublicSharedBookData] = useState<PublicBookViewType | null>(null);
 
   // 1. Load Books & Gather Recent Pages
   const loadBooks = useCallback(async () => {
@@ -120,9 +138,107 @@ export function App() {
     initAuth();
   }, [loadBooks]);
 
+  // Exit shared editor session cleanly
+  const exitSharedEditing = useCallback((alertMsg?: string) => {
+    setIsSharedEditing(false);
+    setShareToken(null);
+    setSharedTokenState(null);
+    setPublicSharedBookData(null);
+    setSelectedSidebarBook(null);
+    setActivePageId(null);
+    setPageData(null);
+    setActiveView("bookshelf");
+    if (books.length > 0) {
+      setActiveBook(books[0]);
+    } else {
+      setActiveBook(null);
+    }
+    const cleanUrl = window.location.pathname.replace(/^\/(?:share|p)\/[^/]+/, "") || "/";
+    window.history.pushState({}, "", cleanUrl);
+    if (alertMsg) {
+      alert(alertMsg);
+    }
+  }, [books]);
+
+  // Helper to start shared editing session for a public notebook
+  const startSharedEditing = useCallback((pubBook: PublicBookViewType) => {
+    setPublicSharedBookData(pubBook);
+    if (sharedToken) {
+      setShareToken(sharedToken);
+    }
+    setIsSharedEditing(true);
+
+    const syntheticBook: Book = {
+      book_id: pubBook.book_id,
+      owner_id: 0,
+      owner_name: pubBook.owner_name,
+      title: pubBook.title,
+      slug: pubBook.slug,
+      user_role: "EDITOR",
+      total_pages: pubBook.tree.length,
+    };
+
+    setActiveBook(syntheticBook);
+    setSelectedSidebarBook(syntheticBook);
+    setPageTree(pubBook.tree);
+    setIsSidebarOpen(true);
+    setActiveView("document");
+
+    if (pubBook.tree.length > 0) {
+      setActivePageId(pubBook.tree[0].page_id);
+    }
+  }, [sharedToken]);
+
+  // Periodic & on-focus check: verify shared notebook is still published and active
+  useEffect(() => {
+    if (!isSharedEditing || !sharedToken) return;
+
+    let isCancelled = false;
+
+    const verifyShareStatus = async () => {
+      try {
+        await api.getPublicBook(sharedToken);
+      } catch (err: any) {
+        if (!isCancelled) {
+          exitSharedEditing(
+            "Access to this shared notebook has been revoked or unpublished by the owner."
+          );
+        }
+      }
+    };
+
+    const interval = setInterval(verifyShareStatus, 6000);
+    const handleFocus = () => {
+      verifyShareStatus();
+    };
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [isSharedEditing, sharedToken, exitSharedEditing]);
+
   // Handle successful login or signup from AuthScreen
   const handleAuthSuccess = async (user: UserProfile) => {
     setCurrentUser(user);
+    if (sharedToken && requireLoginForShare) {
+      setRequireLoginForShare(false);
+      let bookData = publicSharedBookData;
+      if (!bookData) {
+        try {
+          bookData = await api.getPublicBook(sharedToken);
+          setPublicSharedBookData(bookData);
+        } catch (e) {
+          console.error("Failed to load public book after login:", e);
+        }
+      }
+      if (bookData) {
+        startSharedEditing(bookData);
+        return;
+      }
+    }
     await loadBooks();
   };
 
@@ -201,8 +317,12 @@ export function App() {
         setBacklinks(bList);
         setHistory(hList);
         setTags(tList);
-      } catch (err) {
+      } catch (err: any) {
         console.error("Failed to load page render:", err);
+        const msg = String(err?.message || err);
+        if (isSharedEditing && (msg.includes("403") || msg.includes("access") || msg.includes("revoked") || msg.includes("404"))) {
+          exitSharedEditing("Access to this shared notebook has been revoked or unpublished by the owner.");
+        }
       } finally {
         setLoadingPage(false);
       }
@@ -267,7 +387,12 @@ export function App() {
       setPageTree(updatedTree);
       handleSelectPage(created.page_id);
       loadBooks();
-    } catch (err) {
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      if (isSharedEditing && (msg.includes("403") || msg.includes("access") || msg.includes("revoked") || msg.includes("404"))) {
+        exitSharedEditing("Access to this shared notebook has been revoked or unpublished by the owner.");
+        return;
+      }
       alert(`Error creating page: ${err}`);
     }
   };
@@ -287,7 +412,12 @@ export function App() {
       });
       const updatedTree = await api.getBookTree(book.book_id);
       setPageTree(updatedTree);
-    } catch (err) {
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      if (isSharedEditing && (msg.includes("403") || msg.includes("access") || msg.includes("revoked") || msg.includes("404"))) {
+        exitSharedEditing("Access to this shared notebook has been revoked or unpublished by the owner.");
+        return;
+      }
       alert(`Error moving page: ${err}`);
     }
   };
@@ -315,7 +445,12 @@ export function App() {
       }
       handleUnpinPage(pageId);
       loadBooks();
-    } catch (err) {
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      if (isSharedEditing && (msg.includes("403") || msg.includes("access") || msg.includes("revoked") || msg.includes("404"))) {
+        exitSharedEditing("Access to this shared notebook has been revoked or unpublished by the owner.");
+        return;
+      }
       alert(`Failed to delete note: ${err}`);
     }
   };
@@ -337,7 +472,12 @@ export function App() {
       setPinnedPages((prev) =>
         prev.map((p) => (p.page_id === pageId ? { ...p, title: newTitle.trim() } : p))
       );
-    } catch (err) {
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      if (isSharedEditing && (msg.includes("403") || msg.includes("access") || msg.includes("revoked") || msg.includes("404"))) {
+        exitSharedEditing("Access to this shared notebook has been revoked or unpublished by the owner.");
+        return;
+      }
       alert(`Failed to rename note: ${err}`);
     }
   };
@@ -428,6 +568,10 @@ export function App() {
       setHistory(hList);
     } catch (err: any) {
       console.error("Failed to save note content:", err);
+      const msg = String(err?.message || err);
+      if (isSharedEditing && (msg.includes("403") || msg.includes("access") || msg.includes("revoked") || msg.includes("404"))) {
+        exitSharedEditing("Access to this shared notebook has been revoked or unpublished by the owner.");
+      }
       throw err;
     }
   };
@@ -456,6 +600,36 @@ export function App() {
         </div>
         <div className="text-xs font-semibold text-[#8d4b00] animate-pulse">Loading Folio...</div>
       </div>
+    );
+  }
+
+  // Render Public Viewer if link is accessed and not in shared edit mode
+  if (sharedToken && !isSharedEditing) {
+    if (requireLoginForShare && !currentUser) {
+      return <AuthScreen onAuthSuccess={handleAuthSuccess} />;
+    }
+
+    return (
+      <PublicBookView
+        shareToken={sharedToken}
+        currentUser={currentUser}
+        onStartEditing={(pubBook) => {
+          if (currentUser) {
+            startSharedEditing(pubBook);
+          } else {
+            setPublicSharedBookData(pubBook);
+            setRequireLoginForShare(true);
+          }
+        }}
+        onRequireLogin={(pubBook) => {
+          setPublicSharedBookData(pubBook);
+          setRequireLoginForShare(true);
+        }}
+        onNavigateHome={() => {
+          exitSharedEditing();
+          window.location.reload();
+        }}
+      />
     );
   }
 
@@ -488,10 +662,12 @@ export function App() {
         activeView={activeView}
         onChangeView={(view) => setActiveView(view)}
         onManageBookGrants={(book) => setManagingGrantsBook(book)}
+        onPublishBook={(book) => setPublishingBook(book)}
         onCreatePage={handleCreatePage}
         onCreateBook={() => setIsCreateBookOpen(true)}
         isOpen={isSidebarOpen}
         onToggleOpen={() => setIsSidebarOpen((prev) => !prev)}
+        sharedBook={isSharedEditing ? activeBook : null}
       />
 
       {/* 2. Main Workspace Canvas Container */}
@@ -516,7 +692,7 @@ export function App() {
             )}
 
             {/* Top Bar Title */}
-            <div className="flex items-center min-w-0">
+            <div className="flex items-center gap-2.5 min-w-0">
               <span className="font-semibold text-base text-[#1f1b17] truncate">
                 {activeView === "bookshelf"
                   ? "Bookshelf & Library"
@@ -524,6 +700,22 @@ export function App() {
                   ? "Data Explorer & Tables"
                   : activeBook?.title || "Document View"}
               </span>
+
+              {isSharedEditing && (
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-full bg-[#fde68a] text-[#8d4b00] border border-[#f59e0b]/30 text-[11px] font-bold tracking-wide shrink-0">
+                    SHARED EDITOR
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => exitSharedEditing()}
+                    className="px-2 py-0.5 rounded-md bg-[#f0e6e0] hover:bg-[#eae1da] text-[11px] font-semibold text-[#8d4b00] transition-colors cursor-pointer shrink-0"
+                    title="Return to bookshelf"
+                  >
+                    Exit Editor
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -627,6 +819,7 @@ export function App() {
                   onDeleteBook={handleDeleteBook}
                   onRenameBook={handleRenameBook}
                   onImportSuccess={handleImportSuccess}
+                  onPublishBook={(book) => setPublishingBook(book)}
                 />
               ) : (
                 <DocumentView
@@ -648,6 +841,7 @@ export function App() {
                       handleOpenInspectorTab(activePageId, "tags");
                     }
                   }}
+                  isSharedEditing={isSharedEditing}
                 />
               )}
             </div>
@@ -765,6 +959,15 @@ export function App() {
               setGrants(gList);
             }
           }}
+        />
+      )}
+
+      {/* 7. Book Publish & Web Sharing Modal */}
+      {publishingBook && (
+        <BookPublishModal
+          isOpen={!!publishingBook}
+          book={publishingBook}
+          onClose={() => setPublishingBook(null)}
         />
       )}
     </div>

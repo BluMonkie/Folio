@@ -23,6 +23,7 @@ interface BookshelfProps {
   onDeleteBook?: (bookId: number) => void;
   onRenameBook?: (bookId: number, newTitle: string) => void;
   onImportSuccess?: (result: BookImportResponse) => void;
+  onPublishBook?: (book: Book) => void;
 }
 
 export const Bookshelf: React.FC<BookshelfProps> = ({
@@ -36,6 +37,7 @@ export const Bookshelf: React.FC<BookshelfProps> = ({
   onDeleteBook,
   onRenameBook,
   onImportSuccess,
+  onPublishBook,
 }) => {
   const [filter, setFilter] = useState<"all" | "recent" | "pinned">("all");
   const [bookContextMenu, setBookContextMenu] = useState<{ x: number; y: number; book: Book } | null>(null);
@@ -419,6 +421,19 @@ export const Bookshelf: React.FC<BookshelfProps> = ({
             >
               <span className="material-symbols-outlined text-[17px] text-[#78716c]">file_download</span>
               <span>Export Notebook (ZIP)</span>
+            </button>
+
+            {/* Publish to Web */}
+            <button
+              onClick={() => {
+                const b = bookContextMenu.book;
+                setBookContextMenu(null);
+                if (onPublishBook) onPublishBook(b);
+              }}
+              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left hover:bg-[#f6ece6] transition-colors cursor-pointer text-[#1f1b17]"
+            >
+              <span className="material-symbols-outlined text-[17px] text-[#78716c]">public</span>
+              <span>Publish to Web</span>
             </button>
 
             {/* Divider */}

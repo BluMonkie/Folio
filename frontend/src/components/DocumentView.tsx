@@ -18,6 +18,7 @@ interface DocumentViewProps {
   onSaveContent?: (pageId: number, content: string) => Promise<void>;
   tags?: TagItem[];
   onOpenTags?: () => void;
+  isSharedEditing?: boolean;
 }
 
 export const DocumentView: React.FC<DocumentViewProps> = ({
@@ -35,11 +36,20 @@ export const DocumentView: React.FC<DocumentViewProps> = ({
   onSaveContent,
   tags = [],
   onOpenTags,
+  isSharedEditing = false,
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Editor mode: "read" (reading view) | "visual" (Typora-style visual editor) | "split" (CodeMirror + live preview)
-  const [editorMode, setEditorMode] = useState<"read" | "visual" | "split">("read");
+  const [editorMode, setEditorMode] = useState<"read" | "visual" | "split">(
+    isSharedEditing ? "visual" : "read"
+  );
+
+  useEffect(() => {
+    if (isSharedEditing) {
+      setEditorMode("visual");
+    }
+  }, [isSharedEditing]);
 
   // Single canonical markdown state synced across both editor modes
   const [canonicalMarkdown, setCanonicalMarkdown] = useState<string>("");

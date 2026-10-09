@@ -35,6 +35,15 @@ export function removeToken(): void {
   localStorage.removeItem("folio_token");
 }
 
+let activeShareToken: string | null = null;
+export function setShareToken(token: string | null): void {
+  activeShareToken = token;
+}
+
+export function getShareToken(): string | null {
+  return activeShareToken;
+}
+
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   if (!API_BASE && !import.meta.env.DEV) {
     throw new Error(
@@ -50,6 +59,9 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
+  }
+  if (activeShareToken) {
+    headers["X-Share-Token"] = activeShareToken;
   }
 
   try {
@@ -229,6 +241,36 @@ export interface BookImportResponse {
   message: string;
 }
 
+export interface BookPublishInfo {
+  book_id: number;
+  is_published: boolean;
+  share_token: string | null;
+  access_mode: "VIEWER" | "EDITOR";
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface PublicBookView {
+  book_id: number;
+  title: string;
+  slug: string;
+  owner_name: string;
+  access_mode: "VIEWER" | "EDITOR";
+  share_token: string;
+  tree: PageTreeNode[];
+}
+
+export interface PublicPageRender {
+  page_id: number;
+  book_id: number;
+  title: string;
+  slug: string;
+  raw_content: string;
+  html_content: string;
+  tags: TagItem[];
+  backlinks: BacklinkItem[];
+}
+
 // -----------------------------------------------------------------------------
 // API Services
 // -----------------------------------------------------------------------------
@@ -315,6 +357,26 @@ export const api = {
       throw new Error(err.detail || "Failed to import notebook");
     }
     return res.json();
+  },
+
+  // Book Publishing & Public Sharing
+  async getBookPublish(bookId: number): Promise<BookPublishInfo> {
+    return request<BookPublishInfo>(`/books/${bookId}/publish`);
+  },
+
+  async updateBookPublish(bookId: number, data: { is_published: boolean; access_mode: "VIEWER" | "EDITOR" }): Promise<BookPublishInfo> {
+    return request<BookPublishInfo>(`/books/${bookId}/publish`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  async getPublicBook(shareToken: string): Promise<PublicBookView> {
+    return request<PublicBookView>(`/public/books/${shareToken}`);
+  },
+
+  async getPublicPage(shareToken: string, pageId: number): Promise<PublicPageRender> {
+    return request<PublicPageRender>(`/public/pages/${shareToken}/${pageId}`);
   },
 
   // Pages

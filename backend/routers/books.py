@@ -1,6 +1,8 @@
+import contextvars
 import io
 import json
 import logging
+import secrets
 import shutil
 import zipfile
 from datetime import datetime
@@ -18,6 +20,9 @@ from backend.services.markdown import sync_page_backlinks
 from backend.utils import slugify
 
 logger = logging.getLogger("folio.books")
+
+# Thread-local / Async ContextVar for tracking active public share token in request
+current_share_token: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("current_share_token", default=None)
 
 router = APIRouter(prefix="/books", tags=["Books"])
 
@@ -72,13 +77,25 @@ class BookImportResponse(BaseModel):
     skipped_grants: List[str] = []
     message: str
 
+class BookPublishResponse(BaseModel):
+    book_id: int
+    is_published: bool
+    share_token: Optional[str] = None
+    access_mode: str = "VIEWER"
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+class BookPublishUpdate(BaseModel):
+    is_published: bool
+    access_mode: str = "VIEWER"
+
 # -----------------------------------------------------------------------------
 # Authorization Helpers
 # -----------------------------------------------------------------------------
-def get_user_book_role(cursor, book_id: int, user_id: int) -> Optional[str]:
+def get_user_book_role(cursor, book_id: int, user_id: int, share_token: Optional[str] = None) -> Optional[str]:
     """
     Returns the user's role for a book ('OWNER', 'ADMIN', 'EDITOR', 'VIEWER'),
-    or None if the user has no access.
+    or falls back to checking an active BookPublish share_token.
     """
     cursor.execute("SELECT owner_id FROM Book WHERE book_id = %s;", (book_id,))
     book = cursor.fetchone()
@@ -93,11 +110,31 @@ def get_user_book_role(cursor, book_id: int, user_id: int) -> Optional[str]:
         (book_id, user_id)
     )
     collab = cursor.fetchone()
-    return collab["role"] if collab else None
+    if collab:
+        return collab["role"]
 
-def require_book_role(cursor, book_id: int, user_id: int, allowed_roles: tuple = ("OWNER", "ADMIN", "EDITOR", "VIEWER")) -> str:
+    # Check active public share token if provided (or via request ContextVar)
+    token = share_token or current_share_token.get()
+    if token:
+        cursor.execute(
+            "SELECT access_mode FROM BookPublish WHERE book_id = %s AND share_token = %s AND is_active = TRUE;",
+            (book_id, token)
+        )
+        pub = cursor.fetchone()
+        if pub:
+            return pub["access_mode"]
+
+    return None
+
+def require_book_role(
+    cursor, 
+    book_id: int, 
+    user_id: int, 
+    allowed_roles: tuple = ("OWNER", "ADMIN", "EDITOR", "VIEWER"),
+    share_token: Optional[str] = None
+) -> str:
     """Verifies the user has one of the allowed roles, raising 404 or 403 otherwise."""
-    role = get_user_book_role(cursor, book_id, user_id)
+    role = get_user_book_role(cursor, book_id, user_id, share_token=share_token)
     if role is None:
         # Check if book exists to decide between 404 and 403
         cursor.execute("SELECT book_id FROM Book WHERE book_id = %s;", (book_id,))
@@ -425,6 +462,82 @@ def remove_collaborator(book_id: int, user_id: int, current_user: CurrentUser = 
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collaborator not found on this book.")
 
     return {"message": f"User ID {user_id} removed from book collaborators."}
+
+# -----------------------------------------------------------------------------
+# Book Publishing (Public Web Sharing with Viewer / Editor access)
+# -----------------------------------------------------------------------------
+@router.get("/{book_id}/publish", response_model=BookPublishResponse)
+def get_book_publish(book_id: int, current_user: CurrentUser = Depends(get_current_user)):
+    """Retrieves publishing configuration for a book (requires OWNER or ADMIN)."""
+    with get_db() as cursor:
+        require_book_role(cursor, book_id, current_user.user_id, allowed_roles=("OWNER", "ADMIN"))
+        cursor.execute("""
+            SELECT book_id, share_token, access_mode, is_active, created_at, updated_at
+            FROM BookPublish
+            WHERE book_id = %s;
+        """, (book_id,))
+        row = cursor.fetchone()
+        if not row:
+            return {
+                "book_id": book_id,
+                "is_published": False,
+                "share_token": None,
+                "access_mode": "VIEWER",
+                "created_at": None,
+                "updated_at": None
+            }
+        return {
+            "book_id": row["book_id"],
+            "is_published": bool(row["is_active"]),
+            "share_token": row["share_token"],
+            "access_mode": row["access_mode"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"]
+        }
+
+@router.post("/{book_id}/publish", response_model=BookPublishResponse)
+def update_book_publish(book_id: int, payload: BookPublishUpdate, current_user: CurrentUser = Depends(get_current_user)):
+    """Enables, disables, or configures access mode for public web sharing (requires OWNER or ADMIN)."""
+    if payload.access_mode not in ("VIEWER", "EDITOR"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="access_mode must be either 'VIEWER' or 'EDITOR'."
+        )
+
+    with get_db() as cursor:
+        require_book_role(cursor, book_id, current_user.user_id, allowed_roles=("OWNER", "ADMIN"))
+        cursor.execute("SELECT book_id, share_token FROM BookPublish WHERE book_id = %s;", (book_id,))
+        existing = cursor.fetchone()
+
+        if existing:
+            token = existing["share_token"]
+            cursor.execute("""
+                UPDATE BookPublish 
+                SET is_active = %s, access_mode = %s
+                WHERE book_id = %s;
+            """, (payload.is_published, payload.access_mode, book_id))
+        else:
+            token = secrets.token_urlsafe(16)
+            cursor.execute("""
+                INSERT INTO BookPublish (book_id, share_token, access_mode, is_active)
+                VALUES (%s, %s, %s, %s);
+            """, (book_id, token, payload.access_mode, payload.is_published))
+
+        cursor.execute("""
+            SELECT book_id, share_token, access_mode, is_active, created_at, updated_at
+            FROM BookPublish
+            WHERE book_id = %s;
+        """, (book_id,))
+        updated = cursor.fetchone()
+
+        return {
+            "book_id": updated["book_id"],
+            "is_published": bool(updated["is_active"]),
+            "share_token": updated["share_token"],
+            "access_mode": updated["access_mode"],
+            "created_at": updated["created_at"],
+            "updated_at": updated["updated_at"]
+        }
 
 # -----------------------------------------------------------------------------
 # Book Export & Import (ZIP Archive Package: folio.json + pages/*.md)

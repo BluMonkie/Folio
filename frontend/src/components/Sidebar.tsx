@@ -34,8 +34,10 @@ interface SidebarProps {
   onManageBookGrants?: (book: Book) => void;
   onCreatePage: (title: string, parentId?: number | null) => void;
   onCreateBook: () => void;
+  onPublishBook?: (book: Book) => void;
   isOpen: boolean;
   onToggleOpen: () => void;
+  sharedBook?: Book | null;
 }
 
 interface ContextMenuState {
@@ -75,8 +77,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onManageBookGrants,
   onCreatePage,
   onCreateBook,
+  onPublishBook,
   isOpen,
   onToggleOpen,
+  sharedBook,
 }) => {
   // Modal state
   const [isNewPageModalOpen, setIsNewPageModalOpen] = useState(false);
@@ -716,6 +720,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </button>
                   </div>
                   <div className="space-y-1">
+                    {sharedBook && (
+                      <div className="mb-2">
+                        <div
+                          className="group w-full h-9 flex items-center justify-between px-2.5 rounded-lg text-sm transition-colors bg-[#fef3c7] hover:bg-[#fde68a] text-[#8d4b00] font-semibold border border-[#f59e0b]/40 cursor-pointer"
+                          onClick={() => onSelectBook(sharedBook)}
+                          title={`${sharedBook.title} (Shared Editor)`}
+                        >
+                          <div className="flex items-center gap-2 truncate flex-1 text-left">
+                            <span className="material-symbols-outlined text-[18px] text-[#d97706] shrink-0">
+                              edit_document
+                            </span>
+                            <span className="truncate">{sharedBook.title}</span>
+                          </div>
+                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#d97706] text-white font-bold shrink-0">
+                            SHARED
+                          </span>
+                        </div>
+                      </div>
+                    )}
                     {books.map((b) => (
                       <div
                         key={b.book_id}
@@ -1059,6 +1082,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <span className="material-symbols-outlined text-[17px] text-[#78716c]">file_download</span>
               <span>Export Notebook (ZIP)</span>
+            </button>
+
+            {/* 7. Publish to Web */}
+            <button
+              onClick={() => {
+                const b = bookContextMenu.book;
+                setBookContextMenu(null);
+                if (onPublishBook) onPublishBook(b);
+              }}
+              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left hover:bg-[#f6ece6] transition-colors cursor-pointer text-[#1f1b17]"
+            >
+              <span className="material-symbols-outlined text-[17px] text-[#78716c]">public</span>
+              <span>Publish to Web</span>
             </button>
 
             {/* Divider */}
