@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from backend.config import settings
 
-from backend.routers import books, pages, auth, tags, grants, search, tables, public
+from backend.routers import books, pages, auth, tags, grants, search, tables, public, assets
 from backend.routers.books import current_share_token
 
 app = FastAPI(
@@ -41,6 +41,7 @@ app.include_router(grants.router)
 app.include_router(search.router)
 app.include_router(tables.router)
 app.include_router(public.router)
+app.include_router(assets.router)
 
 @app.get("/")
 def read_root():

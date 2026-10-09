@@ -63,6 +63,32 @@ class StorageBackend(ABC):
         """Returns all page slugs belonging to a book."""
         pass
 
+    @abstractmethod
+    def write_asset(self, filename: str, content: bytes, content_type: str = "application/octet-stream") -> str:
+        """Persists an asset/image file in storage and returns its accessible URL."""
+        pass
+
+    @abstractmethod
+    def read_asset(self, filename: str) -> Optional[tuple[bytes, str]]:
+        """Reads an asset from storage. Returns (content_bytes, content_type) or None if not found."""
+        pass
+
+    @abstractmethod
+    def asset_exists(self, filename: str) -> bool:
+        """Returns True if the asset exists in storage, False otherwise."""
+        pass
+
+    @abstractmethod
+    def delete_asset(self, filename: str) -> bool:
+        """Deletes an asset from storage."""
+        pass
+
+    @abstractmethod
+    def get_asset_url(self, filename: str) -> str:
+        """Returns the URL path to access the asset."""
+        pass
+
+
 
 # -----------------------------------------------------------------------------
 # Local FileSystem Storage Backend
@@ -142,6 +168,39 @@ class FileSystemStorage(StorageBackend):
             return []
         return [f.stem for f in book_dir.glob("*.md")]
 
+    def _get_assets_dir(self) -> Path:
+        assets_dir = self.root_dir / "assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        return assets_dir
+
+    def write_asset(self, filename: str, content: bytes, content_type: str = "application/octet-stream") -> str:
+        assets_dir = self._get_assets_dir()
+        path = assets_dir / filename
+        path.write_bytes(content)
+        return f"/assets/{filename}"
+
+    def read_asset(self, filename: str) -> Optional[tuple[bytes, str]]:
+        import mimetypes
+        path = self._get_assets_dir() / filename
+        if not path.exists():
+            return None
+        content_type, _ = mimetypes.guess_type(str(path))
+        return path.read_bytes(), content_type or "application/octet-stream"
+
+    def asset_exists(self, filename: str) -> bool:
+        return (self._get_assets_dir() / filename).exists()
+
+    def delete_asset(self, filename: str) -> bool:
+        path = self._get_assets_dir() / filename
+        if path.exists():
+            path.unlink()
+            return True
+        return False
+
+    def get_asset_url(self, filename: str) -> str:
+        return f"/assets/{filename}"
+
+
 
 # -----------------------------------------------------------------------------
 # S3 / S3-Compatible Object Storage Backend
@@ -189,6 +248,7 @@ class S3Storage(StorageBackend):
         # Signature version v4 is standard for modern S3 and MinIO
         client_kwargs["config"] = Config(signature_version="s3v4")
 
+        self.bucket_name = bucket_name or settings.FOLIO_S3_BUCKET
         self.client = boto3.client("s3", **client_kwargs)
         self._ensure_bucket_exists()
 
@@ -343,6 +403,57 @@ class S3Storage(StorageBackend):
                     pages.append(Path(key).stem)
         return pages
 
+    def _get_asset_key(self, filename: str) -> str:
+        base = f"{self.prefix}/" if self.prefix else ""
+        return f"{base}assets/{filename}"
+
+    def write_asset(self, filename: str, content: bytes, content_type: str = "application/octet-stream") -> str:
+        key = self._get_asset_key(filename)
+        self.client.put_object(
+            Bucket=self.bucket_name,
+            Key=key,
+            Body=content,
+            ContentType=content_type,
+        )
+        return f"/assets/{filename}"
+
+    def read_asset(self, filename: str) -> Optional[tuple[bytes, str]]:
+        from botocore.exceptions import ClientError
+        key = self._get_asset_key(filename)
+        try:
+            response = self.client.get_object(Bucket=self.bucket_name, Key=key)
+            content_type = response.get("ContentType", "application/octet-stream")
+            return response["Body"].read(), content_type
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code in ("NoSuchKey", "404"):
+                return None
+            logger.error("Failed to read asset from S3 ('%s'): %s", key, e)
+            return None
+
+    def asset_exists(self, filename: str) -> bool:
+        from botocore.exceptions import ClientError
+        key = self._get_asset_key(filename)
+        try:
+            self.client.head_object(Bucket=self.bucket_name, Key=key)
+            return True
+        except ClientError:
+            return False
+
+    def delete_asset(self, filename: str) -> bool:
+        from botocore.exceptions import ClientError
+        key = self._get_asset_key(filename)
+        try:
+            self.client.delete_object(Bucket=self.bucket_name, Key=key)
+            return True
+        except ClientError as e:
+            logger.error("Failed to delete asset from S3 ('%s'): %s", key, e)
+            return False
+
+    def get_asset_url(self, filename: str) -> str:
+        return f"/assets/{filename}"
+
+
 
 # -----------------------------------------------------------------------------
 # Factory & Singleton Accessor
@@ -417,3 +528,24 @@ def page_exists(book_slug: str, page_slug: str) -> bool:
 def list_book_pages(book_slug: str) -> List[str]:
     """Lists all page slugs in a book."""
     return get_storage().list_pages(book_slug)
+
+def write_asset(filename: str, content: bytes, content_type: str = "application/octet-stream") -> str:
+    """Writes an asset to the active storage backend."""
+    return get_storage().write_asset(filename, content, content_type)
+
+def read_asset(filename: str) -> Optional[tuple[bytes, str]]:
+    """Reads an asset from the active storage backend."""
+    return get_storage().read_asset(filename)
+
+def asset_exists(filename: str) -> bool:
+    """Returns True if the asset exists in the active storage backend."""
+    return get_storage().asset_exists(filename)
+
+def delete_asset(filename: str) -> bool:
+    """Deletes an asset from the active storage backend."""
+    return get_storage().delete_asset(filename)
+
+def get_asset_url(filename: str) -> str:
+    """Returns the URL path for an asset from the active storage backend."""
+    return get_storage().get_asset_url(filename)
+

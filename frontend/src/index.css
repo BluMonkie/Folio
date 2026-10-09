@@ -410,3 +410,38 @@
   margin-bottom: 0.85rem !important;
   line-height: 1.65 !important;
 }
+
+/* Image styling for Editor & Rendered Markdown */
+.ProseMirror img,
+.prose img,
+.folio-editor-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+  margin: 1.25rem auto;
+  box-shadow: 0 1px 3px rgba(28, 25, 23, 0.08), 0 4px 12px rgba(28, 25, 23, 0.04);
+  border: 1px solid #e7e5e4;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ProseMirror img.ProseMirror-selectednode {
+  outline: 2px solid #8d4b00 !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 0 4px rgba(141, 75, 0, 0.15), 0 4px 16px rgba(28, 25, 23, 0.12) !important;
+}
+
+.prose figure,
+.ProseMirror figure {
+  margin: 1.5rem auto;
+  text-align: center;
+}
+
+.prose figcaption,
+.ProseMirror figcaption {
+  font-size: 0.8rem;
+  color: #78716c;
+  margin-top: 0.5rem;
+  font-style: italic;
+}
+

@@ -1,8 +1,11 @@
-import React, { useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useEditor, EditorContent, ReactNodeViewRenderer, NodeViewWrapper, NodeViewContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import CodeBlock from "@tiptap/extension-code-block";
+import Image from "@tiptap/extension-image";
 import { Markdown } from "tiptap-markdown";
+import { api, resolveAssetUrl } from "../api";
+import { InsertImageModal } from "./InsertImageModal";
 
 interface VisualEditorProps {
   content: string;
@@ -74,6 +77,7 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
 }) => {
   // Keep track of the last markdown emitted from editor to prevent destructive reset loops
   const lastEmittedRef = useRef<string>(content);
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
 
   const editor = useEditor({
     extensions: [
@@ -93,6 +97,13 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
           class: "folio-code-block",
         },
       }),
+      Image.configure({
+        inline: false,
+        allowBase64: true,
+        HTMLAttributes: {
+          class: "folio-editor-image rounded-xl my-4 max-w-full shadow-xs border border-[#e7e5e4]",
+        },
+      }),
       Markdown.configure({
         html: true,
         transformPastedText: true,
@@ -103,6 +114,50 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
     editorProps: {
       attributes: {
         class: "ProseMirror prose max-w-none text-[#1f1b17] leading-relaxed text-[15px] focus:outline-none min-h-[420px] p-4 sm:p-8",
+      },
+      handleDrop: (view, event, _slice, moved) => {
+        if (!moved && event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length > 0) {
+          const droppedFile = event.dataTransfer.files[0];
+          if (droppedFile.type.startsWith("image/")) {
+            event.preventDefault();
+            api.uploadImage(droppedFile).then((res) => {
+              const resolved = resolveAssetUrl(res.url);
+              const node = view.state.schema.nodes.image.create({
+                src: resolved,
+                alt: droppedFile.name,
+                title: droppedFile.name,
+              });
+              const transaction = view.state.tr.replaceSelectionWith(node);
+              view.dispatch(transaction);
+            }).catch((err) => {
+              alert(`Failed to upload dropped image: ${err.message || err}`);
+            });
+            return true;
+          }
+        }
+        return false;
+      },
+      handlePaste: (view, event) => {
+        if (event.clipboardData && event.clipboardData.files && event.clipboardData.files.length > 0) {
+          const pastedFile = event.clipboardData.files[0];
+          if (pastedFile.type.startsWith("image/")) {
+            event.preventDefault();
+            api.uploadImage(pastedFile).then((res) => {
+              const resolved = resolveAssetUrl(res.url);
+              const node = view.state.schema.nodes.image.create({
+                src: resolved,
+                alt: pastedFile.name,
+                title: pastedFile.name,
+              });
+              const transaction = view.state.tr.replaceSelectionWith(node);
+              view.dispatch(transaction);
+            }).catch((err) => {
+              alert(`Failed to upload pasted image: ${err.message || err}`);
+            });
+            return true;
+          }
+        }
+        return false;
       },
     },
     onUpdate: ({ editor }) => {
@@ -381,6 +436,17 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
           + [[Wikilink]]
         </button>
 
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => setIsImageModalOpen(true)}
+          className="px-2.5 py-1 rounded-lg bg-[#f0fdf4] hover:bg-[#dcfce7] border border-[#16a34a]/30 text-[#16a34a] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+          title="Insert or Upload Image"
+        >
+          <span className="material-symbols-outlined text-[15px]">add_photo_alternate</span>
+          <span>+ Image</span>
+        </button>
+
         <div className="w-px h-5 bg-[#e7e5e4] mx-1 ml-auto" />
 
         {/* Undo / Redo */}
@@ -410,6 +476,19 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
       <div className="bg-white min-h-[440px]">
         <EditorContent editor={editor} />
       </div>
+
+      {/* 3. Insert Image Modal */}
+      <InsertImageModal
+        isOpen={isImageModalOpen}
+        onClose={() => setIsImageModalOpen(false)}
+        onInsert={(url, altText) => {
+          editor
+            .chain()
+            .focus()
+            .setImage({ src: url, alt: altText, title: altText })
+            .run();
+        }}
+      />
     </div>
   );
 };

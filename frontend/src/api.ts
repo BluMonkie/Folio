@@ -250,6 +250,13 @@ export interface BookPublishInfo {
   updated_at?: string | null;
 }
 
+export interface AssetUploadResponse {
+  url: string;
+  filename: string;
+  content_type: string;
+  size: number;
+}
+
 export interface PublicBookView {
   book_id: number;
   title: string;
@@ -589,7 +596,42 @@ export const api = {
       method: "DELETE",
     });
   },
+
+  // Assets / Images Upload
+  async uploadImage(file: File): Promise<AssetUploadResponse> {
+    const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    if (activeShareToken) headers["X-Share-Token"] = activeShareToken;
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const res = await fetch(`${API_BASE}/api/assets/upload`, {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Image upload failed" }));
+      throw new Error(err.detail || "Failed to upload image");
+    }
+
+    return res.json();
+  },
 };
+
+export function resolveAssetUrl(url: string): string {
+  if (!url) return "";
+  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:") || url.startsWith("blob:")) {
+    return url;
+  }
+  if (url.startsWith("/assets/")) {
+    return API_BASE ? `${API_BASE}${url}` : url;
+  }
+  return url;
+}
 
 export async function downloadBookExport(bookId: number): Promise<string> {
   const token = getToken();

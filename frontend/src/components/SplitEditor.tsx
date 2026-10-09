@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { marked } from "marked";
+import { api, resolveAssetUrl } from "../api";
+import { InsertImageModal } from "./InsertImageModal";
 
 interface SplitEditorProps {
   content: string;
@@ -21,6 +23,7 @@ export const SplitEditor: React.FC<SplitEditorProps> = ({
   onNavigatePage,
 }) => {
   const previewRef = useRef<HTMLDivElement>(null);
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
 
   // Live client-side compilation of Markdown as the user types
   const liveHtml = useMemo(() => {
@@ -125,6 +128,41 @@ export const SplitEditor: React.FC<SplitEditorProps> = ({
     insertText(` [[Note Title]]`);
   };
 
+  const insertImage = (url: string, altText: string) => {
+    const snippet = `\n\n![${altText || "Image"}](${url})\n\n`;
+    onChange(content + snippet);
+  };
+
+  const handleEditorDrop = (e: React.DragEvent) => {
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const droppedFile = e.dataTransfer.files[0];
+      if (droppedFile.type.startsWith("image/")) {
+        e.preventDefault();
+        api.uploadImage(droppedFile).then((res) => {
+          const resolved = resolveAssetUrl(res.url);
+          insertImage(resolved, droppedFile.name);
+        }).catch((err) => {
+          alert(`Failed to upload dropped image: ${err.message || err}`);
+        });
+      }
+    }
+  };
+
+  const handleEditorPaste = (e: React.ClipboardEvent) => {
+    if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length > 0) {
+      const pastedFile = e.clipboardData.files[0];
+      if (pastedFile.type.startsWith("image/")) {
+        e.preventDefault();
+        api.uploadImage(pastedFile).then((res) => {
+          const resolved = resolveAssetUrl(res.url);
+          insertImage(resolved, pastedFile.name);
+        }).catch((err) => {
+          alert(`Failed to upload pasted image: ${err.message || err}`);
+        });
+      }
+    }
+  };
+
   return (
     <div className="flex flex-col bg-white rounded-xl border border-[#e7e5e4] shadow-xs overflow-hidden">
       {/* Helper Insertion Toolbar */}
@@ -198,13 +236,27 @@ export const SplitEditor: React.FC<SplitEditorProps> = ({
           >
             + [[Wikilink]]
           </button>
+
+          <button
+            type="button"
+            onClick={() => setIsImageModalOpen(true)}
+            className="px-2.5 py-1 rounded-lg bg-[#f0fdf4] hover:bg-[#dcfce7] border border-[#16a34a]/30 text-[#16a34a] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+            title="Insert or Upload Image"
+          >
+            <span className="material-symbols-outlined text-[15px]">add_photo_alternate</span>
+            <span>+ Image</span>
+          </button>
         </div>
       </div>
 
       {/* Side-by-Side Split Panes */}
       <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-[#e7e5e4] min-h-[520px]">
         {/* Left Pane: CodeMirror Markdown Editor */}
-        <div className="flex flex-col bg-[#fcfbfa]">
+        <div
+          className="flex flex-col bg-[#fcfbfa]"
+          onDrop={handleEditorDrop}
+          onPaste={handleEditorPaste}
+        >
           <div className="px-3.5 py-1.5 bg-[#f6ece6] border-b border-[#e7e5e4] text-[11px] font-semibold text-[#78716c] flex items-center justify-between select-none">
             <span>Editor</span>
             <span className="font-mono text-[10px] text-[#a8a29e]">Markdown</span>
@@ -246,6 +298,13 @@ export const SplitEditor: React.FC<SplitEditorProps> = ({
           />
         </div>
       </div>
+
+      {/* Insert Image Modal */}
+      <InsertImageModal
+        isOpen={isImageModalOpen}
+        onClose={() => setIsImageModalOpen(false)}
+        onInsert={(url, altText) => insertImage(url, altText)}
+      />
     </div>
   );
 };
