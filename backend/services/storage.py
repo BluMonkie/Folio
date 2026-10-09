@@ -165,7 +165,6 @@ class S3Storage(StorageBackend):
         import boto3
         from botocore.config import Config
 
-        self.bucket_name = bucket_name or settings.FOLIO_S3_BUCKET
         raw_endpoint = endpoint_url or settings.FOLIO_S3_ENDPOINT_URL
         if raw_endpoint:
             raw_endpoint = raw_endpoint.strip()

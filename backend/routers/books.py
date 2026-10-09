@@ -1,15 +1,20 @@
+import io
+import json
 import logging
 import shutil
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr, Field
 
 from backend.config import settings
 from backend.database import get_db
 from backend.services import storage
 from backend.services.auth import get_current_user, CurrentUser
+from backend.services.markdown import sync_page_backlinks
 from backend.utils import slugify
 
 logger = logging.getLogger("folio.books")
@@ -55,6 +60,17 @@ class CollaboratorResponse(BaseModel):
     name: str
     email: str
     role: str
+
+class BookImportResponse(BaseModel):
+    book_id: int
+    title: str
+    slug: str
+    pages_imported: int
+    tags_restored: int
+    grants_restored: int
+    grants_requested: bool
+    skipped_grants: List[str] = []
+    message: str
 
 # -----------------------------------------------------------------------------
 # Authorization Helpers
@@ -409,3 +425,444 @@ def remove_collaborator(book_id: int, user_id: int, current_user: CurrentUser = 
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collaborator not found on this book.")
 
     return {"message": f"User ID {user_id} removed from book collaborators."}
+
+# -----------------------------------------------------------------------------
+# Book Export & Import (ZIP Archive Package: folio.json + pages/*.md)
+# -----------------------------------------------------------------------------
+@router.get("/{book_id}/export")
+def export_book_zip(book_id: int, current_user: CurrentUser = Depends(get_current_user)):
+    """
+    Exports a notebook as a portable ZIP archive:
+    - folio.json: complete metadata, page hierarchy, tags, and table grant configs.
+    - pages/{slug}.md: raw, clean Markdown documents for each page.
+    Requires at least VIEWER access to the book.
+    """
+    with get_db() as cursor:
+        require_book_role(cursor, book_id, current_user.user_id)
+
+        # 1. Fetch Book details
+        cursor.execute("""
+            SELECT b.book_id, b.title, b.slug, b.created_at, u.name AS owner_name, u.email AS owner_email
+            FROM Book b
+            JOIN User u ON b.owner_id = u.user_id
+            WHERE b.book_id = %s;
+        """, (book_id,))
+        book_row = cursor.fetchone()
+        if not book_row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Book not found.")
+
+        # 2. Fetch Book-level table grants
+        cursor.execute("""
+            SELECT qt.table_name, qt.db, btg.can_read, btg.can_write
+            FROM BookTableGrants btg
+            JOIN QueryableTables qt ON btg.table_id = qt.table_id
+            WHERE btg.book_id = %s
+            ORDER BY qt.table_name ASC;
+        """, (book_id,))
+        book_grants = [
+            {
+                "table_name": g["table_name"],
+                "db": g["db"],
+                "can_read": bool(g["can_read"]),
+                "can_write": bool(g["can_write"]),
+            }
+            for g in cursor.fetchall()
+        ]
+
+        # 3. Fetch Collaborators (metadata context)
+        cursor.execute("""
+            SELECT u.email, bc.role
+            FROM BookCollaborators bc
+            JOIN User u ON bc.user_id = u.user_id
+            WHERE bc.book_id = %s;
+        """, (book_id,))
+        collaborators = [{"email": c["email"], "role": c["role"]} for c in cursor.fetchall()]
+
+        # 4. Fetch all pages
+        cursor.execute("""
+            SELECT 
+                p.page_id, 
+                p.parent_page_id, 
+                parent.slug AS parent_slug, 
+                p.title, 
+                p.slug, 
+                p.position
+            FROM Page p
+            LEFT JOIN Page parent ON p.parent_page_id = parent.page_id
+            WHERE p.book_id = %s
+            ORDER BY p.position ASC, p.page_id ASC;
+        """, (book_id,))
+        page_rows = cursor.fetchall()
+
+        metadata_pages = []
+        page_markdown_files = {}
+
+        for p in page_rows:
+            p_id = p["page_id"]
+            p_slug = p["slug"]
+
+            # Read content from active storage backend
+            content = storage.read_page_content(book_row["slug"], p_slug)
+            file_rel_path = f"pages/{p_slug}.md"
+            page_markdown_files[file_rel_path] = content
+
+            # Attached tags
+            cursor.execute("""
+                SELECT t.name
+                FROM PageTags pt
+                JOIN Tag t ON pt.tag_id = t.tag_id
+                WHERE pt.page_id = %s
+                ORDER BY t.name ASC;
+            """, (p_id,))
+            tags = [t_row["name"] for t_row in cursor.fetchall()]
+
+            # Page-level table grants
+            cursor.execute("""
+                SELECT qt.table_name, qt.db, pp.can_read, pp.can_write
+                FROM PageTableGrants ptg
+                JOIN QueryableTables qt ON ptg.table_id = qt.table_id
+                JOIN PagePermission pp ON ptg.grant_id = pp.grant_id
+                WHERE ptg.page_id = %s
+                ORDER BY qt.table_name ASC;
+            """, (p_id,))
+            page_grants = [
+                {
+                    "table_name": pg["table_name"],
+                    "db": pg["db"],
+                    "can_read": bool(pg["can_read"]),
+                    "can_write": bool(pg["can_write"]),
+                }
+                for pg in cursor.fetchall()
+            ]
+
+            metadata_pages.append({
+                "title": p["title"],
+                "slug": p_slug,
+                "position": p["position"],
+                "parent_slug": p["parent_slug"],
+                "file_path": file_rel_path,
+                "tags": tags,
+                "grants": page_grants,
+            })
+
+    # 5. Build ZIP archive in-memory
+    manifest = {
+        "folio_version": "1.0",
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "book": {
+            "title": book_row["title"],
+            "slug": book_row["slug"],
+            "created_at": book_row["created_at"].isoformat() if book_row["created_at"] else None,
+        },
+        "book_grants": book_grants,
+        "pages": metadata_pages,
+        "collaborators": collaborators,
+    }
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Write folio.json manifest
+        zf.writestr("folio.json", json.dumps(manifest, indent=2))
+        # Write individual markdown files in pages/
+        for rel_path, md_text in page_markdown_files.items():
+            zf.writestr(rel_path, md_text.encode("utf-8"))
+
+    zip_buffer.seek(0)
+    filename = f"{book_row['slug']}.zip"
+
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        }
+    )
+
+@router.post("/import", response_model=BookImportResponse, status_code=status.HTTP_201_CREATED)
+async def import_book_zip(
+    file: UploadFile = File(..., description="ZIP archive containing folio.json and pages/ folder"),
+    title: Optional[str] = Form(None),
+    slug: Optional[str] = Form(None),
+    restore_grants: bool = Form(False),
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Imports a notebook from an uploaded ZIP archive:
+    - Unpacks folio.json (or metadata.json) and individual markdown files from pages/.
+    - Reconstructs book entity with authenticated user as OWNER.
+    - Two-pass page hierarchy reconstruction (parent_slug -> new parent_page_id).
+    - Preserves and restores all tags attached to pages.
+    - Accurately re-indexes all page backlinks.
+    - Explicitly asks/handles restoring table permissions and grants if restore_grants=True.
+    - Sets baseline edit history and snapshot tracking.
+    """
+    # 1. Read uploaded archive
+    content_bytes = await file.read()
+    if not content_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty."
+        )
+
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(content_bytes), "r")
+    except zipfile.BadZipFile:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded file is not a valid ZIP archive."
+        )
+
+    # 2. Locate folio.json manifest
+    manifest_name = None
+    for candidate in ["folio.json", "metadata.json"]:
+        if candidate in archive.namelist():
+            manifest_name = candidate
+            break
+
+    if not manifest_name:
+        # Check subfolder like my-notebook/folio.json
+        for name in archive.namelist():
+            if name.endswith("folio.json") or name.endswith("metadata.json"):
+                manifest_name = name
+                break
+
+    if not manifest_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Archive missing 'folio.json' manifest file."
+        )
+
+    try:
+        manifest_raw = archive.read(manifest_name).decode("utf-8")
+        manifest = json.loads(manifest_raw)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to parse 'folio.json' manifest: {e}"
+        )
+
+    book_meta = manifest.get("book", {})
+    raw_title = (title or book_meta.get("title") or "Imported Notebook").strip()
+    raw_slug = (slug or book_meta.get("slug") or slugify(raw_title)).strip()
+    base_slug = slugify(raw_slug) or "imported-notebook"
+
+    with get_db() as cursor:
+        # 3. Guarantee unique book slug
+        new_slug = base_slug
+        counter = 1
+        while True:
+            cursor.execute("SELECT book_id FROM Book WHERE slug = %s;", (new_slug,))
+            if not cursor.fetchone():
+                break
+            new_slug = f"{base_slug}-{counter}"
+            counter += 1
+
+        # 4. Insert Book
+        cursor.execute(
+            "INSERT INTO Book (owner_id, title, slug) VALUES (%s, %s, %s);",
+            (current_user.user_id, raw_title, new_slug)
+        )
+        new_book_id = cursor.lastrowid
+
+        # 5. Ensure container in storage backend
+        storage.ensure_book_dir(new_slug)
+
+        # 6. Provision sandboxed MySQL role for this book
+        cursor.execute(f"CREATE ROLE IF NOT EXISTS 'role_book_{new_book_id}';")
+        try:
+            cursor.execute(f"GRANT 'role_book_{new_book_id}' TO '{settings.RUNNER_DB_USER}';")
+        except Exception:
+            try:
+                cursor.execute(f"GRANT 'role_book_{new_book_id}' TO '{settings.RUNNER_DB_USER}'@'%';")
+            except Exception:
+                cursor.execute(f"GRANT 'role_book_{new_book_id}' TO '{settings.RUNNER_DB_USER}'@'localhost';")
+
+        # 7. Pass 1: Insert all Pages & extract content from ZIP
+        manifest_pages = manifest.get("pages", [])
+        slug_to_new_page_id = {}
+        created_records = []
+        used_page_slugs = set()
+
+        # Build index of files in zip
+        namelist_set = set(archive.namelist())
+
+        for idx, p in enumerate(manifest_pages):
+            p_title = (p.get("title") or f"Untitled {idx+1}").strip()
+            raw_p_slug = p.get("slug") or slugify(p_title)
+            p_base_slug = slugify(raw_p_slug) or f"note-{idx+1}"
+
+            p_slug = p_base_slug
+            p_cnt = 1
+            while p_slug in used_page_slugs:
+                p_slug = f"{p_base_slug}-{p_cnt}"
+                p_cnt += 1
+            used_page_slugs.add(p_slug)
+
+            position = p.get("position", idx + 1)
+            cursor.execute(
+                "INSERT INTO Page (book_id, parent_page_id, title, slug, position) VALUES (%s, NULL, %s, %s, %s);",
+                (new_book_id, p_title, p_slug, position)
+            )
+            new_page_id = cursor.lastrowid
+
+            if p.get("slug"):
+                slug_to_new_page_id[p["slug"]] = new_page_id
+            slug_to_new_page_id[p_slug] = new_page_id
+
+            # Extract markdown content from zip
+            md_content = ""
+            file_candidates = [
+                p.get("file_path"),
+                f"pages/{p.get('slug')}.md",
+                f"pages/{p_slug}.md",
+                f"{p.get('slug')}.md",
+            ]
+            for fc in file_candidates:
+                if fc and fc in namelist_set:
+                    try:
+                        md_content = archive.read(fc).decode("utf-8")
+                        break
+                    except Exception:
+                        pass
+                # Check with prefix if zip was created with parent folder
+                if fc:
+                    for name in namelist_set:
+                        if name.endswith(fc):
+                            try:
+                                md_content = archive.read(name).decode("utf-8")
+                                break
+                            except Exception:
+                                pass
+                    if md_content:
+                        break
+
+            # If not in file, fallback to embedded content if present
+            if not md_content and "content" in p:
+                md_content = p["content"]
+
+            storage.write_page_content(new_slug, p_slug, md_content)
+
+            # Baseline edit history & snapshot
+            cursor.execute(
+                "INSERT INTO EditHistory (user_id, page_id, action) VALUES (%s, %s, 'CREATE');",
+                (current_user.user_id, new_page_id)
+            )
+            edit_id = cursor.lastrowid
+            cursor.execute(
+                "INSERT INTO Edits (edit_id, snapshot) VALUES (%s, %s);",
+                (edit_id, md_content)
+            )
+
+            created_records.append({
+                "page_id": new_page_id,
+                "title": p_title,
+                "slug": p_slug,
+                "parent_slug": p.get("parent_slug"),
+                "content": md_content,
+                "tags": p.get("tags", []),
+                "grants": p.get("grants", []),
+            })
+
+        # 8. Pass 2: Reconstruct Parent-Child Hierarchy
+        for rec in created_records:
+            parent_slug = rec["parent_slug"]
+            if parent_slug and parent_slug in slug_to_new_page_id:
+                parent_id = slug_to_new_page_id[parent_slug]
+                cursor.execute(
+                    "UPDATE Page SET parent_page_id = %s WHERE page_id = %s;",
+                    (parent_id, rec["page_id"])
+                )
+
+        # 9. Pass 3: Restore Tags
+        total_tags_restored = 0
+        for rec in created_records:
+            for raw_tag in rec["tags"]:
+                if not raw_tag or not isinstance(raw_tag, str):
+                    continue
+                tag_name = raw_tag.strip().lstrip("#").strip().lower()
+                if not tag_name:
+                    continue
+                cursor.execute("INSERT IGNORE INTO Tag (name) VALUES (%s);", (tag_name,))
+                cursor.execute("SELECT tag_id FROM Tag WHERE name = %s;", (tag_name,))
+                t_row = cursor.fetchone()
+                if t_row:
+                    cursor.execute(
+                        "INSERT IGNORE INTO PageTags (page_id, tag_id) VALUES (%s, %s);",
+                        (rec["page_id"], t_row["tag_id"])
+                    )
+                    total_tags_restored += 1
+
+        # 10. Pass 4: Re-process Backlinks
+        for rec in created_records:
+            sync_page_backlinks(cursor, rec["page_id"], new_book_id, rec["content"])
+
+        # 11. Pass 5: Explicit Table Grants Restoration
+        restored_grants_count = 0
+        skipped_grants = []
+
+        if restore_grants:
+            # Book-level grants
+            for bg in manifest.get("book_grants", []):
+                t_name = bg.get("table_name")
+                if not t_name:
+                    continue
+                cursor.execute("SELECT table_id, db FROM QueryableTables WHERE table_name = %s;", (t_name,))
+                matched = cursor.fetchone()
+                if matched:
+                    tbl_id = matched["table_id"]
+                    db_name = matched["db"]
+                    can_read = bool(bg.get("can_read", True))
+                    can_write = bool(bg.get("can_write", False))
+                    cursor.execute("""
+                        INSERT INTO BookTableGrants (book_id, table_id, can_read, can_write)
+                        VALUES (%s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE can_read = VALUES(can_read), can_write = VALUES(can_write);
+                    """, (new_book_id, tbl_id, can_read, can_write))
+                    if can_read:
+                        cursor.execute(f"GRANT SELECT ON `{db_name}`.`{t_name}` TO 'role_book_{new_book_id}';")
+                    restored_grants_count += 1
+                else:
+                    skipped_grants.append(f"Book Grant: Table '{t_name}' not found in QueryableTables.")
+
+            # Page-level grants
+            for rec in created_records:
+                for pg in rec["grants"]:
+                    t_name = pg.get("table_name")
+                    if not t_name:
+                        continue
+                    cursor.execute("SELECT table_id, db FROM QueryableTables WHERE table_name = %s;", (t_name,))
+                    matched = cursor.fetchone()
+                    if matched:
+                        tbl_id = matched["table_id"]
+                        db_name = matched["db"]
+                        can_read = bool(pg.get("can_read", True))
+                        can_write = bool(pg.get("can_write", False))
+                        cursor.execute("""
+                            INSERT INTO PageTableGrants (page_id, table_id)
+                            VALUES (%s, %s)
+                            ON DUPLICATE KEY UPDATE grant_id = LAST_INSERT_ID(grant_id);
+                        """, (rec["page_id"], tbl_id))
+                        grant_id = cursor.lastrowid
+                        cursor.execute("""
+                            INSERT INTO PagePermission (grant_id, can_read, can_write)
+                            VALUES (%s, %s, %s)
+                            ON DUPLICATE KEY UPDATE can_read = VALUES(can_read), can_write = VALUES(can_write);
+                        """, (grant_id, can_read, can_write))
+                        if can_read:
+                            cursor.execute(f"GRANT SELECT ON `{db_name}`.`{t_name}` TO 'role_book_{new_book_id}';")
+                        restored_grants_count += 1
+                    else:
+                        skipped_grants.append(f"Page '{rec['title']}': Table '{t_name}' not found in QueryableTables.")
+
+    return {
+        "book_id": new_book_id,
+        "title": raw_title,
+        "slug": new_slug,
+        "pages_imported": len(created_records),
+        "tags_restored": total_tags_restored,
+        "grants_restored": restored_grants_count,
+        "grants_requested": restore_grants,
+        "skipped_grants": skipped_grants,
+        "message": f"Successfully imported '{raw_title}' with {len(created_records)} pages."
+    }

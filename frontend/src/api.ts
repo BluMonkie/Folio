@@ -217,6 +217,18 @@ export interface QueryableTableItem {
   db: string;
 }
 
+export interface BookImportResponse {
+  book_id: number;
+  title: string;
+  slug: string;
+  pages_imported: number;
+  tags_restored: number;
+  grants_restored: number;
+  grants_requested: boolean;
+  skipped_grants: string[];
+  message: string;
+}
+
 // -----------------------------------------------------------------------------
 // API Services
 // -----------------------------------------------------------------------------
@@ -275,6 +287,34 @@ export const api = {
     return request<{ message: string }>(`/books/${bookId}`, {
       method: "DELETE",
     });
+  },
+
+  async exportBook(bookId: number): Promise<Blob> {
+    const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`${API_BASE}/books/${bookId}/export`, { headers });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Export failed" }));
+      throw new Error(err.detail || "Failed to export notebook");
+    }
+    return res.blob();
+  },
+
+  async importBook(formData: FormData): Promise<BookImportResponse> {
+    const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`${API_BASE}/books/import`, {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Import failed" }));
+      throw new Error(err.detail || "Failed to import notebook");
+    }
+    return res.json();
   },
 
   // Pages
@@ -488,3 +528,30 @@ export const api = {
     });
   },
 };
+
+export async function downloadBookExport(bookId: number): Promise<string> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}/books/${bookId}/export`, { headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Export failed" }));
+    throw new Error(err.detail || "Failed to export notebook");
+  }
+  const blob = await res.blob();
+  let filename = `notebook-${bookId}.zip`;
+  const disposition = res.headers.get("Content-Disposition");
+  if (disposition && disposition.includes("filename=")) {
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    if (match && match[1]) filename = match[1];
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  return filename;
+}

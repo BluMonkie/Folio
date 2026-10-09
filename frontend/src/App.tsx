@@ -7,7 +7,8 @@ import type {
   PageGrantItem, 
   BacklinkItem, 
   EditHistoryItem, 
-  TagItem 
+  TagItem,
+  BookImportResponse
 } from "./api";
 import { api, getToken } from "./api";
 import { Sidebar, type PinnedPageItem } from "./components/Sidebar";
@@ -396,6 +397,21 @@ export function App() {
     }
   };
 
+  // Handler: Notebook Import Success
+  const handleImportSuccess = async (result: BookImportResponse) => {
+    try {
+      const refreshedBooks = await api.listBooks();
+      setBooks(refreshedBooks);
+      const newBook = refreshedBooks.find((b) => b.book_id === result.book_id);
+      if (newBook) {
+        handleSelectBook(newBook);
+        setActiveView("document");
+      }
+    } catch (err) {
+      console.error("Failed to refresh books after import:", err);
+    }
+  };
+
   // Handler: Save Page Markdown Content
   const handleSavePageContent = async (pageId: number, content: string) => {
     try {
@@ -610,6 +626,7 @@ export function App() {
                   onCreatePage={handleCreateQuickNote}
                   onDeleteBook={handleDeleteBook}
                   onRenameBook={handleRenameBook}
+                  onImportSuccess={handleImportSuccess}
                 />
               ) : (
                 <DocumentView

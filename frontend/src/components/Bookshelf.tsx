@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import type { Book, UserProfile } from "../api";
+import { BookImportModal } from "./BookImportModal";
+import { downloadBookExport, type Book, type UserProfile, type BookImportResponse } from "../api";
 
 interface RecentPageItem {
   page_id: number;
@@ -21,6 +22,7 @@ interface BookshelfProps {
   onCreatePage: () => void;
   onDeleteBook?: (bookId: number) => void;
   onRenameBook?: (bookId: number, newTitle: string) => void;
+  onImportSuccess?: (result: BookImportResponse) => void;
 }
 
 export const Bookshelf: React.FC<BookshelfProps> = ({
@@ -33,10 +35,12 @@ export const Bookshelf: React.FC<BookshelfProps> = ({
   onCreatePage,
   onDeleteBook,
   onRenameBook,
+  onImportSuccess,
 }) => {
   const [filter, setFilter] = useState<"all" | "recent" | "pinned">("all");
   const [bookContextMenu, setBookContextMenu] = useState<{ x: number; y: number; book: Book } | null>(null);
   const [renamingBook, setRenamingBook] = useState<{ bookId: number; title: string } | null>(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
@@ -104,13 +108,22 @@ export const Bookshelf: React.FC<BookshelfProps> = ({
         <div className="flex items-center gap-2.5 self-start md:self-auto shrink-0">
           <button
             onClick={onCreateBook}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#f0e6e0] hover:bg-[#eae1da] text-[#1f1b17] text-sm font-semibold shadow-xs transition-colors group cursor-pointer"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#f0e6e0] hover:bg-[#eae1da] text-[#1f1b17] text-sm font-semibold shadow-xs transition-colors group cursor-pointer"
             type="button"
           >
             <span className="material-symbols-outlined text-[18px] text-[#8d4b00] group-hover:rotate-45 transition-transform duration-200">
               add
             </span>
             <span>New Book</span>
+          </button>
+          <button
+            onClick={() => setIsImportModalOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#f0e6e0] hover:bg-[#eae1da] text-[#1f1b17] text-sm font-semibold shadow-xs transition-colors cursor-pointer"
+            type="button"
+            title="Import notebook from ZIP archive"
+          >
+            <span className="material-symbols-outlined text-[18px] text-[#8d4b00]">file_upload</span>
+            <span>Import</span>
           </button>
           <button
             onClick={onCreatePage}
@@ -389,6 +402,25 @@ export const Bookshelf: React.FC<BookshelfProps> = ({
               <span>Copy Book Reference</span>
             </button>
 
+            {/* Export Book */}
+            <button
+              onClick={async () => {
+                const b = bookContextMenu.book;
+                setBookContextMenu(null);
+                try {
+                  showToast(`Preparing export for "${b.title}"...`);
+                  await downloadBookExport(b.book_id);
+                  showToast(`Exported "${b.title}" successfully!`);
+                } catch (err: any) {
+                  showToast(`Export failed: ${err.message}`);
+                }
+              }}
+              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left hover:bg-[#f6ece6] transition-colors cursor-pointer text-[#1f1b17]"
+            >
+              <span className="material-symbols-outlined text-[17px] text-[#78716c]">file_download</span>
+              <span>Export Notebook (ZIP)</span>
+            </button>
+
             {/* Divider */}
             <div className="h-px bg-[#f0e6e0] my-1" />
 
@@ -476,6 +508,15 @@ export const Bookshelf: React.FC<BookshelfProps> = ({
           <span>{toastMessage}</span>
         </div>
       )}
+      {/* Book Import Modal */}
+      <BookImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onSuccess={(result) => {
+          showToast(result.message);
+          if (onImportSuccess) onImportSuccess(result);
+        }}
+      />
     </div>
   );
 };

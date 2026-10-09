@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
-import type { Book, PageTreeNode } from "../api";
+import { downloadBookExport, type Book, type PageTreeNode } from "../api";
 
 export interface PinnedPageItem {
   page_id: number;
@@ -1040,6 +1040,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <span className="material-symbols-outlined text-[17px] text-[#78716c]">link</span>
               <span>Copy Book Reference</span>
+            </button>
+
+            {/* 6. Export Book */}
+            <button
+              onClick={async () => {
+                const b = bookContextMenu.book;
+                setBookContextMenu(null);
+                try {
+                  showToast(`Preparing export for "${b.title}"...`);
+                  await downloadBookExport(b.book_id);
+                  showToast(`Exported "${b.title}" successfully!`);
+                } catch (err: any) {
+                  showToast(`Export failed: ${err.message}`);
+                }
+              }}
+              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left hover:bg-[#f6ece6] transition-colors cursor-pointer text-[#1f1b17]"
+            >
+              <span className="material-symbols-outlined text-[17px] text-[#78716c]">file_download</span>
+              <span>Export Notebook (ZIP)</span>
             </button>
 
             {/* Divider */}
