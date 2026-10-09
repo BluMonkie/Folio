@@ -26,8 +26,12 @@ class Settings:
     FOLIO_STORAGE_ROOT: Path = BASE_DIR / os.getenv("FOLIO_STORAGE_ROOT", "storage")
 
     # S3 / Object Storage settings (AWS S3, MinIO, Cloudflare R2, LocalStack)
-    FOLIO_S3_BUCKET: str = os.getenv("FOLIO_S3_BUCKET", "folio-storage")
-    FOLIO_S3_ENDPOINT_URL: str | None = os.getenv("FOLIO_S3_ENDPOINT_URL") or None
+    FOLIO_S3_BUCKET: str = os.getenv("FOLIO_S3_BUCKET", "folio-storage").strip()
+    _raw_s3_url: str = os.getenv("FOLIO_S3_ENDPOINT_URL", "").strip()
+    FOLIO_S3_ENDPOINT_URL: str | None = (
+        (f"https://{_raw_s3_url}" if _raw_s3_url and not (_raw_s3_url.startswith("http://") or _raw_s3_url.startswith("https://")) else _raw_s3_url)
+        or None
+    )
     FOLIO_S3_REGION_NAME: str = os.getenv("FOLIO_S3_REGION_NAME", "us-east-1")
     FOLIO_S3_ACCESS_KEY_ID: str | None = os.getenv("FOLIO_S3_ACCESS_KEY_ID") or None
     FOLIO_S3_SECRET_ACCESS_KEY: str | None = os.getenv("FOLIO_S3_SECRET_ACCESS_KEY") or None

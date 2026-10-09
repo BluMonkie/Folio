@@ -1,4 +1,26 @@
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const RAW_API_BASE: string | undefined = import.meta.env.VITE_API_BASE_URL;
+
+function resolveApiBase(): string {
+  if (RAW_API_BASE && RAW_API_BASE.trim()) {
+    const cleaned = RAW_API_BASE.trim().replace(/\/$/, "");
+    return cleaned.startsWith("http://") || cleaned.startsWith("https://")
+      ? cleaned
+      : `https://${cleaned}`;
+  }
+  // In development, default to local backend. In production, warn if unset.
+  return import.meta.env.DEV ? "http://127.0.0.1:8000" : "";
+}
+
+export const API_BASE = resolveApiBase();
+
+if (typeof window !== "undefined") {
+  console.log(`[Folio] API Base: "${API_BASE || '(Unconfigured)'}" | DEV=${import.meta.env.DEV}`);
+  if (!API_BASE && !import.meta.env.DEV) {
+    console.error(
+      "[Folio Error] VITE_API_BASE_URL is not set in Vercel environment variables! Add it in Vercel Project Settings -> Environment Variables and redeploy."
+    );
+  }
+}
 
 // Token management
 export function getToken(): string | null {
@@ -14,6 +36,12 @@ export function removeToken(): void {
 }
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  if (!API_BASE && !import.meta.env.DEV) {
+    throw new Error(
+      "Backend API URL is not configured. Please set VITE_API_BASE_URL in your Vercel Project Settings and redeploy."
+    );
+  }
+
   const token = getToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -24,17 +52,22 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
-    headers,
-  });
+  try {
+    const res = await fetch(`${API_BASE}${endpoint}`, {
+      ...options,
+      headers,
+    });
 
-  if (!res.ok) {
-    const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(errorBody.detail || `Request failed with status ${res.status}`);
+    if (!res.ok) {
+      const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(errorBody.detail || `Request failed with status ${res.status}`);
+    }
+
+    return res.json();
+  } catch (err: any) {
+    console.error(`[Folio Request Failed] ${API_BASE}${endpoint}:`, err);
+    throw err;
   }
-
-  return res.json();
 }
 
 // -----------------------------------------------------------------------------

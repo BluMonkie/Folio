@@ -1,3 +1,4 @@
+import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +11,8 @@ from backend.database import get_db
 from backend.services import storage
 from backend.services.auth import get_current_user, CurrentUser
 from backend.utils import slugify
+
+logger = logging.getLogger("folio.books")
 
 router = APIRouter(prefix="/books", tags=["Books"])
 

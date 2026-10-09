@@ -165,8 +165,12 @@ class S3Storage(StorageBackend):
         import boto3
         from botocore.config import Config
 
-        self.bucket_name = bucket_name or settings.FOLIO_S3_BUCKET
-        self.endpoint_url = endpoint_url or settings.FOLIO_S3_ENDPOINT_URL
+        raw_endpoint = endpoint_url or settings.FOLIO_S3_ENDPOINT_URL
+        if raw_endpoint:
+            raw_endpoint = raw_endpoint.strip()
+            if not (raw_endpoint.startswith("http://") or raw_endpoint.startswith("https://")):
+                raw_endpoint = f"https://{raw_endpoint}"
+        self.endpoint_url = raw_endpoint
         self.region_name = region_name or settings.FOLIO_S3_REGION_NAME
         self.prefix = (prefix if prefix is not None else settings.FOLIO_S3_PREFIX).strip().strip("/")
 

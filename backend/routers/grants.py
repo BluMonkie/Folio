@@ -1,3 +1,4 @@
+import logging
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -6,6 +7,8 @@ from backend.config import settings
 from backend.database import get_db
 from backend.routers.books import require_book_role
 from backend.services.auth import get_current_user, CurrentUser
+
+logger = logging.getLogger("folio.grants")
 
 router = APIRouter(tags=["Grants"])
 
@@ -263,7 +266,10 @@ def grant_table_to_page(page_id: int, payload: GrantCreate, current_user: Curren
         # Synchronize MySQL role if read is allowed
         if payload.can_read:
             cursor.execute(f"CREATE ROLE IF NOT EXISTS 'role_book_{book_id}';")
-            cursor.execute(f"GRANT 'role_book_{book_id}' TO '{settings.RUNNER_DB_USER}'@'localhost';")
+            try:
+                cursor.execute(f"GRANT 'role_book_{book_id}' TO '{settings.RUNNER_DB_USER}'@'localhost';")
+            except Exception:
+                cursor.execute(f"GRANT 'role_book_{book_id}' TO '{settings.RUNNER_DB_USER}'@'%';")
             cursor.execute(f"GRANT SELECT ON `{db_name}`.`{table_name}` TO 'role_book_{book_id}';")
 
         return {
