@@ -2,11 +2,11 @@
   "rewrites": [
     {
       "source": "/assets/:path*",
-      "destination": "$VITE_API_BASE_URL/assets/:path*"
+      "destination": "https://folio-api-uzrj.onrender.com/assets/:path*"
     },
     {
       "source": "/api/assets/:path*",
-      "destination": "$VITE_API_BASE_URL/api/assets/:path*"
+      "destination": "https://folio-api-uzrj.onrender.com/api/assets/:path*"
     },
     {
       "source": "/(.*)",

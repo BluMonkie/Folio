@@ -5,6 +5,9 @@ import { defineConfig } from 'vite'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    assetsDir: '_assets',
+  },
   server: {
     port: 5173,
     proxy: {
